@@ -166,10 +166,10 @@
 </div>
 
 <script>
-// ── SharePoint constants (Aviation Training site, TempPostOrders library) ──
-const SP_SITE_ID = "aspsecurityinc.sharepoint.com,07de8382-702a-43fc-87bb-4acea85e0686,6742535a-1958-4662-ad8d-fa33f510f2e5";
-const SP_LIST_ID = "613159f5-0da4-42cd-b671-7b37405cba75";
 const EXCEL_FILENAME = "CallUpForm_Data.xlsx";
+const FOLDER_NAME    = "ASP-CallUp";
+const OWNER_UPN      = "dramlagan@security-asp.com";
+const SHARE_WITH     = ["fmohammad@security-asp.com"];
 
 const msalConfig = {
   auth: {
@@ -182,7 +182,8 @@ const msalConfig = {
 
 const loginRequest = { scopes: ["Files.ReadWrite", "Mail.Send"] };
 
-let msalInstance, accessToken = null, spDriveId = null;
+let msalInstance, accessToken = null;
+let sharedDriveId = null, sharedFolderId = null, currentUserUpn = "";
 let orders = [], statusHistory = [], selectedId = null, isManager = false;
 
 try {
@@ -204,12 +205,13 @@ function loginPopup() {
   msalInstance.loginPopup(loginRequest).then(async response => {
     msalInstance.setActiveAccount(response.account);
     accessToken = response.accessToken;
+    currentUserUpn = response.account.username || "";
     document.getElementById("authSection").style.display = "none";
     document.getElementById("appContent").style.display = "block";
     document.getElementById("signOutBtn").style.display = "block";
-    detectUserRole(response.account.username);
-    showLoading("Connecting to SharePoint...");
-    await initSharePointDrive();
+    detectUserRole(currentUserUpn);
+    showLoading("Connecting to shared drive...");
+    await initSharedDrive();
     await loadDataFromExcel();
     hideLoading();
   }).catch(e => { alert("Login failed: " + e.message); });
@@ -231,17 +233,76 @@ function detectUserRole(username) {
   document.getElementById("userBadge").title = username;
 }
 
-// ── Resolve the shared OneDrive folder (dramlagan owns it; others access via sharedWithMe) ──
-async function initSharePointDrive() {
-  // For dramlagan: file lives in their own OneDrive root.
-  // For other users: look for the file in items shared with them.
-  // spDriveId stays null → driveFileUrl falls back to me/drive for now.
-  spDriveId = "me";
-  console.log("Drive mode: OneDrive (me/drive)");
+// ── Shared OneDrive folder: owner creates/shares; others discover via sharedWithMe ──
+async function initSharedDrive() {
+  const isOwner = currentUserUpn.toLowerCase() === OWNER_UPN.toLowerCase();
+
+  if (isOwner) {
+    // Find or create the ASP-CallUp folder in owner's OneDrive
+    let r = await fetch(
+      `https://graph.microsoft.com/v1.0/me/drive/root:/${encodeURIComponent(FOLDER_NAME)}`,
+      { headers: { "Authorization": `Bearer ${accessToken}` } }
+    );
+    let folderId;
+    if (r.status === 404) {
+      const cr = await fetch(
+        "https://graph.microsoft.com/v1.0/me/drive/root/children",
+        {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${accessToken}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ name: FOLDER_NAME, folder: {}, "@microsoft.graph.conflictBehavior": "rename" })
+        }
+      );
+      folderId = (await cr.json()).id;
+    } else if (r.ok) {
+      folderId = (await r.json()).id;
+    } else {
+      console.error("Failed to find/create shared folder:", r.status); return;
+    }
+    sharedFolderId = folderId;
+    sharedDriveId  = null; // null = use me/drive
+
+    // Auto-share with each recipient (silently, no invitation email)
+    for (const email of SHARE_WITH) {
+      await fetch(
+        `https://graph.microsoft.com/v1.0/me/drive/items/${folderId}/invite`,
+        {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${accessToken}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ requireSignIn: true, sendInvitation: false, roles: ["write"],
+            recipients: [{ email }] })
+        }
+      ).catch(e => console.warn("Share invite error (may already be shared):", e));
+    }
+    console.log("Drive: owner mode, folder =", folderId);
+
+  } else {
+    // Non-owner: discover the shared folder
+    const r = await fetch(
+      "https://graph.microsoft.com/v1.0/me/drive/sharedWithMe",
+      { headers: { "Authorization": `Bearer ${accessToken}` } }
+    );
+    if (!r.ok) { console.error("sharedWithMe failed:", r.status); return; }
+    const item = ((await r.json()).value || []).find(i =>
+      i.name === FOLDER_NAME && i.remoteItem
+    );
+    if (item) {
+      sharedDriveId  = item.remoteItem.parentReference.driveId;
+      sharedFolderId = item.remoteItem.id;
+      console.log("Drive: non-owner mode, remote drive =", sharedDriveId);
+    } else {
+      console.warn("Shared folder not found — owner may not have shared it yet.");
+    }
+  }
 }
 
-function driveFileUrl(filename) {
-  return `https://graph.microsoft.com/v1.0/me/drive/root:/${encodeURIComponent(filename)}:/content`;
+function fileUrl(filename) {
+  if (!sharedFolderId) return null;
+  const enc = encodeURIComponent(filename);
+  if (!sharedDriveId) {
+    return `https://graph.microsoft.com/v1.0/me/drive/items/${sharedFolderId}:/${enc}:/content`;
+  }
+  return `https://graph.microsoft.com/v1.0/drives/${sharedDriveId}/items/${sharedFolderId}:/${enc}:/content`;
 }
 
 // ── Email ──
@@ -257,12 +318,12 @@ async function sendEmail(recipient, subject, body) {
   } catch(e) { console.error("sendEmail error:", e); }
 }
 
-// ── Excel read/write (SharePoint TempPostOrders library) ──
+// ── Excel read/write (shared OneDrive ASP-CallUp folder) ──
 async function loadDataFromExcel() {
-  if (!spDriveId) { console.error("Drive not initialized"); return; }
+  if (!sharedFolderId) { console.error("Shared folder not initialized"); return; }
   try {
     showLoading("Loading orders...");
-    const r = await fetch(driveFileUrl(EXCEL_FILENAME), {
+    const r = await fetch(fileUrl(EXCEL_FILENAME), {
       headers: { "Authorization": `Bearer ${accessToken}` }
     });
     if (r.status === 404 || r.status === 400) {
@@ -298,9 +359,11 @@ async function createNewExcelFile() {
 }
 
 async function uploadWorkbook(wb) {
+  const url = fileUrl(EXCEL_FILENAME);
+  if (!url) { console.error("uploadWorkbook: no fileUrl — folder not initialized"); return false; }
   const bytes = XLSX.write(wb, { bookType: "xlsx", type: "array" });
   const blob = new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-  const r = await fetch(driveFileUrl(EXCEL_FILENAME), {
+  const r = await fetch(url, {
     method: "PUT",
     headers: { "Authorization": `Bearer ${accessToken}`,
       "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
@@ -314,7 +377,7 @@ async function writeExcelFile(updatedOrders, newHistoryEntry) {
   try {
     showLoading("Saving...");
     // Download current workbook to preserve all sheets
-    const r = await fetch(driveFileUrl(EXCEL_FILENAME), {
+    const r = await fetch(fileUrl(EXCEL_FILENAME), {
       headers: { "Authorization": `Bearer ${accessToken}` }
     });
     let wb;
@@ -436,11 +499,11 @@ async function archiveOrder() {
 async function downloadPDF(filename) {
   try {
     showLoading("Downloading PDF...");
-    const r = await fetch(driveFileUrl(filename), {
+    const r = await fetch(fileUrl(filename), {
       headers: { "Authorization": `Bearer ${accessToken}` }
     });
     hideLoading();
-    if (!r.ok) { alert("PDF not found in SharePoint library."); return; }
+    if (!r.ok) { alert("PDF not found in shared drive."); return; }
     const blob = await r.blob();
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -580,16 +643,16 @@ function renderExtractedFields(d) {
 }
 
 async function addExtractedOrder() {
-  if (!window.extractedData || !spDriveId) return;
+  if (!window.extractedData || !sharedFolderId) return;
   const newOrderID = "TPO-" + new Date().getFullYear() + "-" + String(orders.length + 1).padStart(3, "0");
   let pdfFilename = "";
 
   if (window.uploadedPDFFile) {
     try {
-      showLoading("Uploading PDF to SharePoint...");
+      showLoading("Uploading PDF...");
       const filename = newOrderID + "_" + window.uploadedPDFFile.name;
       const ab = await window.uploadedPDFFile.arrayBuffer();
-      const r = await fetch(driveFileUrl(filename), {
+      const r = await fetch(fileUrl(filename), {
         method: "PUT",
         headers: { "Authorization": `Bearer ${accessToken}`, "Content-Type": "application/pdf" },
         body: new Blob([ab], { type: "application/pdf" })
