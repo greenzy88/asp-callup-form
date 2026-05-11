@@ -180,8 +180,7 @@ const msalConfig = {
   cache: { cacheLocation: "localStorage", storeAuthStateInCookie: false }
 };
 
-// Files.ReadWrite.All is required to access SharePoint document libraries
-const loginRequest = { scopes: ["Files.ReadWrite.All", "Sites.ReadWrite.All", "Mail.Send"] };
+const loginRequest = { scopes: ["Files.ReadWrite", "Mail.Send"] };
 
 let msalInstance, accessToken = null, spDriveId = null;
 let orders = [], statusHistory = [], selectedId = null, isManager = false;
@@ -232,25 +231,17 @@ function detectUserRole(username) {
   document.getElementById("userBadge").title = username;
 }
 
-// ── Resolve the Graph drive ID for the TempPostOrders SharePoint library ──
+// ── Resolve the shared OneDrive folder (dramlagan owns it; others access via sharedWithMe) ──
 async function initSharePointDrive() {
-  try {
-    const r = await fetch(
-      `https://graph.microsoft.com/v1.0/sites/${SP_SITE_ID}/lists/${SP_LIST_ID}/drive`,
-      { headers: { "Authorization": `Bearer ${accessToken}` } }
-    );
-    if (!r.ok) {
-      console.error("Could not resolve SharePoint drive:", r.status, await r.text());
-      return;
-    }
-    const d = await r.json();
-    spDriveId = d.id;
-    console.log("SharePoint drive ready:", spDriveId);
-  } catch(e) { console.error("initSharePointDrive error:", e); }
+  // For dramlagan: file lives in their own OneDrive root.
+  // For other users: look for the file in items shared with them.
+  // spDriveId stays null → driveFileUrl falls back to me/drive for now.
+  spDriveId = "me";
+  console.log("Drive mode: OneDrive (me/drive)");
 }
 
 function driveFileUrl(filename) {
-  return `https://graph.microsoft.com/v1.0/sites/${SP_SITE_ID}/drives/${spDriveId}/root:/${encodeURIComponent(filename)}:/content`;
+  return `https://graph.microsoft.com/v1.0/me/drive/root:/${encodeURIComponent(filename)}:/content`;
 }
 
 // ── Email ──
@@ -301,9 +292,9 @@ async function createNewExcelFile() {
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([
       { OrderID:"", Status:"", ChangedBy:"", Timestamp:"", Notes:"" }
     ]), "StatusHistory");
-    await uploadWorkbook(wb);
-    await loadDataFromExcel();
-  } catch(e) { console.error("createNewExcelFile error:", e); }
+    const ok = await uploadWorkbook(wb);
+    if (ok) await loadDataFromExcel();
+  } catch(e) { console.error("createNewExcelFile error:", e); hideLoading(); }
 }
 
 async function uploadWorkbook(wb) {
