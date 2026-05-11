@@ -596,9 +596,12 @@ async function handlePDFUpload(input) {
 }
 
 function parseFields(text, filename) {
+  // Strip checkbox bleed-over from two-column PDF table layout
+  const cleanField = val => val.replace(/[☐☑☒][\s\S]*$/, '').trim();
+
   const between = (startPat, endPat, fb = "See PDF") => {
     const m = text.match(new RegExp(startPat + "[:\\s]*([\\s\\S]+?)(?=" + endPat + ")", "i"));
-    return m ? m[1].replace(/\s+/g, " ").trim() : fb;
+    return m ? cleanField(m[1].replace(/\s+/g, " ")) : fb;
   };
   const dateAfter = label => {
     const m = text.match(new RegExp(label, "i"));
@@ -614,6 +617,36 @@ function parseFields(text, filename) {
     const t = win.match(/\b(\d{4})\b|\b(\d{1,2}:\d{2}\s*(?:AM|PM)?)\b/i);
     return t ? (t[1] || t[2]) : "See PDF";
   };
+
+  // PPE: find checked (☒) items — scattered in right column due to table layout
+  const PPE_ITEMS = [
+    ['RAIC',               'RAIC'],
+    ['AVOP DA',            'AVOP\\s*DA'],
+    ['AVOP D',             'AVOP\\s*D(?!A)'],
+    ['Radio',              'Radio'],
+    ['Hi-Visibility Vest', 'Hi.{0,3}Visibility\\s*Vest'],
+    ['Safety Footwear',    'Safety\\s*Footwear'],
+    ['Hard Hat',           'Hard\\s*Hat'],
+    ['Eye Protection',     'Eye\\s*Protection'],
+    ['Hearing Protection', 'Hearing\\s*Protection'],
+  ];
+  const ppe = PPE_ITEMS.filter(([, pat]) =>
+    new RegExp('☒\\s*' + pat, 'i').test(text)
+  ).map(([label]) => label).join(", ");
+
+  // Days: find checked day abbreviations
+  const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].filter(d =>
+    new RegExp('☒\\s*' + d, 'i').test(text)
+  ).join(", ");
+
+  // Coverage
+  const coverage = /☒\s*Specific\s*Hours/i.test(text) ? 'Specific Hours' :
+                   /☒\s*Continuous/i.test(text) ? 'Continuous' : '';
+
+  // Duties: section 1.0 up to 2.0
+  const dutiesM = text.match(/1\.0\s*Post Description[\s\S]+?Duties\s*([\s\S]+?)(?=2\.0\s*Site|Page\s*\d|$)/i);
+  const duties = dutiesM ? dutiesM[1].replace(/\s*-\s+/g, '\n• ').trim() : '';
+
   return {
     event: between("Event\\s*\\/\\s*Project", "Start Date").replace(/^[:\s]+/, "").trim() || "See PDF",
     startDate: dateAfter("Start Date"),
@@ -624,21 +657,26 @@ function parseFields(text, filename) {
     meetingLocation: between("Meeting Location", "Site Contact"),
     siteContact: between("Site Contact", "Contact Number"),
     contactNumber: between("Contact Number", "Post Details|Post Description|1\\.0"),
-    filename
+    ppe, days, coverage, duties, filename
   };
 }
 
 function renderExtractedFields(d) {
+  const esc = s => (s || '').replace(/"/g, '&quot;').replace(/</g, '&lt;');
   document.getElementById("extractedFields").innerHTML = `
-    <div class="extracted-field"><label>Event</label><input class="form-control form-control-sm" id="ef_event" value="${d.event || ''}"></div>
-    <div class="extracted-field"><label>Start Date</label><input class="form-control form-control-sm" id="ef_startDate" value="${d.startDate || ''}"></div>
-    <div class="extracted-field"><label>End Date</label><input class="form-control form-control-sm" id="ef_endDate" value="${d.endDate || ''}"></div>
-    <div class="extracted-field"><label>Start Time</label><input class="form-control form-control-sm" id="ef_startTime" value="${d.startTime || ''}"></div>
-    <div class="extracted-field"><label>End Time</label><input class="form-control form-control-sm" id="ef_endTime" value="${d.endTime || ''}"></div>
-    <div class="extracted-field"><label># Guards</label><input class="form-control form-control-sm" id="ef_numGuards" value="${d.numGuards || '1'}"></div>
-    <div class="extracted-field"><label>Location</label><input class="form-control form-control-sm" id="ef_meetingLocation" value="${d.meetingLocation || ''}"></div>
-    <div class="extracted-field"><label>Site Contact</label><input class="form-control form-control-sm" id="ef_siteContact" value="${d.siteContact || ''}"></div>
-    <div class="extracted-field"><label>Contact #</label><input class="form-control form-control-sm" id="ef_contactNumber" value="${d.contactNumber || ''}"></div>`;
+    <div class="extracted-field"><label>Event</label><input class="form-control form-control-sm" id="ef_event" value="${esc(d.event)}"></div>
+    <div class="extracted-field"><label>Start Date</label><input class="form-control form-control-sm" id="ef_startDate" value="${esc(d.startDate)}"></div>
+    <div class="extracted-field"><label>End Date</label><input class="form-control form-control-sm" id="ef_endDate" value="${esc(d.endDate)}"></div>
+    <div class="extracted-field"><label>Start Time</label><input class="form-control form-control-sm" id="ef_startTime" value="${esc(d.startTime)}"></div>
+    <div class="extracted-field"><label>End Time</label><input class="form-control form-control-sm" id="ef_endTime" value="${esc(d.endTime)}"></div>
+    <div class="extracted-field"><label># Guards</label><input class="form-control form-control-sm" id="ef_numGuards" value="${esc(d.numGuards || '1')}"></div>
+    <div class="extracted-field"><label>Days</label><input class="form-control form-control-sm" id="ef_days" value="${esc(d.days)}"></div>
+    <div class="extracted-field"><label>Coverage</label><input class="form-control form-control-sm" id="ef_coverage" value="${esc(d.coverage)}"></div>
+    <div class="extracted-field"><label>Location</label><input class="form-control form-control-sm" id="ef_meetingLocation" value="${esc(d.meetingLocation)}"></div>
+    <div class="extracted-field"><label>Site Contact</label><input class="form-control form-control-sm" id="ef_siteContact" value="${esc(d.siteContact)}"></div>
+    <div class="extracted-field"><label>Contact #</label><input class="form-control form-control-sm" id="ef_contactNumber" value="${esc(d.contactNumber)}"></div>
+    <div class="extracted-field"><label>PPE Required</label><input class="form-control form-control-sm" id="ef_ppe" value="${esc(d.ppe)}"></div>
+    <div class="extracted-field" style="grid-column:1/-1"><label>Duties</label><textarea class="form-control form-control-sm" id="ef_duties" rows="4">${esc(d.duties)}</textarea></div>`;
   window.extractedData = d;
 }
 
@@ -673,7 +711,10 @@ async function addExtractedOrder() {
     Location: document.getElementById("ef_meetingLocation").value || "",
     SiteContact: document.getElementById("ef_siteContact").value || "",
     ContactNumber: document.getElementById("ef_contactNumber").value || "",
-    PPERequired: "", Duties: "",
+    Days: document.getElementById("ef_days").value || "",
+    Coverage: document.getElementById("ef_coverage").value || "",
+    PPERequired: document.getElementById("ef_ppe").value || "",
+    Duties: document.getElementById("ef_duties").value || "",
     Status: "Pending", UpdatedBy: "PDF Upload",
     LastUpdated: new Date().toLocaleString(),
     Archived: "No", PDFFilename: pdfFilename
