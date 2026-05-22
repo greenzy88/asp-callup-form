@@ -363,10 +363,26 @@ async function loadDataFromExcel() {
     if (!r.ok) { console.error("Load error:", r.status); hideLoading(); return; }
     const buf = await r.arrayBuffer();
     const wb = XLSX.read(buf, { type: "array" });
-    orders = XLSX.utils.sheet_to_json(wb.Sheets["Orders"] || {});
-    statusHistory = XLSX.utils.sheet_to_json(wb.Sheets["StatusHistory"] || {});
+    const rawOrders = XLSX.utils.sheet_to_json(wb.Sheets["Orders"] || {});
+    const rawHistory = XLSX.utils.sheet_to_json(wb.Sheets["StatusHistory"] || {});
+    // Filter blank rows (e.g. the seed row left by createNewExcelFile, or
+    // any row whose OrderID is empty/whitespace). These show as a click-but-do-nothing
+    // entry in the table and can't be deleted via the UI.
+    const isReal = o => o && o.OrderID && String(o.OrderID).trim();
+    orders = rawOrders.filter(isReal);
+    statusHistory = rawHistory.filter(isReal);
+    const purgedOrders = rawOrders.length - orders.length;
+    const purgedHistory = rawHistory.length - statusHistory.length;
     renderTable();
     updateStats();
+    // Silently rewrite the workbook to purge blank rows from the source file
+    if ((purgedOrders > 0 || purgedHistory > 0) && isAdmin) {
+      console.log(`Auto-cleanup: removing ${purgedOrders} blank order row(s) + ${purgedHistory} orphan history row(s)`);
+      const cleanWb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(cleanWb, XLSX.utils.json_to_sheet(orders), "Orders");
+      XLSX.utils.book_append_sheet(cleanWb, XLSX.utils.json_to_sheet(statusHistory), "StatusHistory");
+      await uploadWorkbook(cleanWb);
+    }
   } catch(e) { console.error("loadDataFromExcel error:", e); }
   hideLoading();
 }
