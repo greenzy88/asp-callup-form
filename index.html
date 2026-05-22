@@ -155,6 +155,7 @@
           <div class="d-flex gap-2 mb-4">
             <button class="btn btn-sm" style="background:var(--asp-blue);color:#fff" onclick="updateStatus()">Save Update</button>
             <button class="btn btn-sm btn-warning" id="archiveBtn" onclick="archiveOrder()" style="display:none;">&#x1F4E6; Archive</button>
+            <button class="btn btn-sm btn-danger" id="deleteBtn" onclick="deleteOrder()" style="display:none;">&#x1F5D1; Delete</button>
           </div>
           <h6 class="fw-bold mb-2" style="color:var(--asp-blue)">Status History</h6>
           <div id="historyLog"></div>
@@ -184,7 +185,7 @@ const loginRequest = { scopes: ["Files.ReadWrite", "Mail.Send"] };
 
 let msalInstance, accessToken = null;
 let sharedDriveId = null, sharedFolderId = null, currentUserUpn = "";
-let orders = [], statusHistory = [], selectedId = null, isManager = false;
+let orders = [], statusHistory = [], selectedId = null, isManager = false, isAdmin = false;
 
 try {
   msalInstance = new msal.PublicClientApplication(msalConfig);
@@ -230,6 +231,7 @@ function detectUserRole(username) {
   } else {
     document.getElementById("statusPanel").style.display = "none";
   }
+  isAdmin = username.toLowerCase() === OWNER_UPN.toLowerCase();
   document.getElementById("userBadge").title = username;
 }
 
@@ -373,7 +375,7 @@ async function uploadWorkbook(wb) {
   return r.ok;
 }
 
-async function writeExcelFile(updatedOrders, newHistoryEntry) {
+async function writeExcelFile(updatedOrders, newHistoryEntry, forceHistoryRewrite) {
   try {
     showLoading("Saving...");
     // Download current workbook to preserve all sheets
@@ -391,6 +393,8 @@ async function writeExcelFile(updatedOrders, newHistoryEntry) {
     wb.Sheets["Orders"] = XLSX.utils.json_to_sheet(updatedOrders);
     if (newHistoryEntry) {
       statusHistory.push(newHistoryEntry);
+      wb.Sheets["StatusHistory"] = XLSX.utils.json_to_sheet(statusHistory);
+    } else if (forceHistoryRewrite) {
       wb.Sheets["StatusHistory"] = XLSX.utils.json_to_sheet(statusHistory);
     }
     await uploadWorkbook(wb);
@@ -442,6 +446,7 @@ function selectOrder(id) {
     (o.SiteContact ? " | " + o.SiteContact : '');
   document.getElementById("newStatus").value = o.Status || '';
   document.getElementById("archiveBtn").style.display = isManager ? "block" : "none";
+  document.getElementById("deleteBtn").style.display = isAdmin ? "block" : "none";
 
   const ppeArray = typeof o.PPERequired === "string" && o.PPERequired
     ? o.PPERequired.split(",") : [];
@@ -493,6 +498,39 @@ async function archiveOrder() {
     order.LastUpdated = new Date().toLocaleString();
     await writeExcelFile(orders);
     closeDetail();
+  }
+}
+
+async function deleteOrder() {
+  if (!isAdmin || !selectedId) return;
+  const order = orders.find(o => o.OrderID === selectedId);
+  if (!order) return;
+  const msg = `PERMANENTLY DELETE order ${selectedId}?\n\nThis will:\n• Remove the row from the spreadsheet\n• Delete the PDF (${order.PDFFilename || "none"}) from OneDrive\n• Remove its status history\n\nThis cannot be undone.`;
+  if (!confirm(msg)) return;
+  try {
+    showLoading("Deleting...");
+    if (order.PDFFilename && sharedFolderId) {
+      const enc = encodeURIComponent(order.PDFFilename);
+      const delUrl = sharedDriveId
+        ? `https://graph.microsoft.com/v1.0/drives/${sharedDriveId}/items/${sharedFolderId}:/${enc}:`
+        : `https://graph.microsoft.com/v1.0/me/drive/items/${sharedFolderId}:/${enc}:`;
+      const r = await fetch(delUrl, {
+        method: "DELETE",
+        headers: { "Authorization": `Bearer ${accessToken}` }
+      });
+      if (!r.ok && r.status !== 404) {
+        console.error("PDF delete failed:", r.status);
+      }
+    }
+    orders = orders.filter(o => o.OrderID !== selectedId);
+    statusHistory = statusHistory.filter(h => h.OrderID !== selectedId);
+    await writeExcelFile(orders, null, true);
+    hideLoading();
+    closeDetail();
+  } catch(e) {
+    hideLoading();
+    alert("Delete failed: " + e.message);
+    console.error(e);
   }
 }
 
