@@ -31,18 +31,40 @@ IPHONE_13 = {
     ),
 }
 
-MOCK_INJECT_JS = r"""() => {
+def role_inject(role: str) -> str:
+    """Return JS snippet that sets up the right role + visibility."""
+    if role == "admin":
+        return """
+          isManager = true; isAdmin = true;
+          document.getElementById('uploadCard').style.display = 'block';
+          document.getElementById('statusPanel').style.display = 'block';
+          document.getElementById('userBadge').textContent = 'Manager (Edit Access)';
+          currentUserUpn = 'dramlagan@security-asp.com';
+        """
+    if role == "manager":
+        return """
+          isManager = true; isAdmin = false;
+          document.getElementById('uploadCard').style.display = 'block';
+          document.getElementById('statusPanel').style.display = 'block';
+          document.getElementById('userBadge').textContent = 'Manager (Edit Access)';
+          currentUserUpn = 'fmohammad@security-asp.com';
+        """
+    # client (BBTCA / atraining@) — read-only
+    return """
+      isManager = false; isAdmin = false;
+      document.getElementById('uploadCard').style.display = 'none';
+      document.getElementById('statusPanel').style.display = 'none';
+      document.getElementById('userBadge').textContent = 'Client (Read-Only)';
+      currentUserUpn = 'atraining@security-asp.com';
+    """
+
+
+MOCK_INJECT_JS_TEMPLATE = r"""(roleJs) => {
   // Switch to authenticated view
   document.getElementById('authSection').style.display = 'none';
   document.getElementById('appContent').style.display = 'block';
-  document.getElementById('uploadCard').style.display = 'block';
-  document.getElementById('statusPanel').style.display = 'block';
-
-  // Set state — as if we'd signed in as dramlagan@ (admin)
-  currentUserUpn = 'dramlagan@security-asp.com';
-  isManager = true;
-  isAdmin = true;
-  document.getElementById('userBadge').textContent = 'Manager (Edit Access)';
+  // Role-specific state + visibility
+  eval(roleJs);
 
   // Fake orders covering varied lengths + statuses
   orders = [
@@ -95,45 +117,39 @@ def shot(page, name: str, full: bool = True) -> Path:
     return path
 
 
-def main() -> None:
+def render_role(role: str) -> None:
     file_url = f"file:///{str(INDEX).replace(chr(92), '/')}"
     with sync_playwright() as p:
         b = p.chromium.launch(headless=True)
         ctx = b.new_context(**IPHONE_13)
         page = ctx.new_page()
-
-        print(f"loading {file_url}")
         page.goto(file_url, wait_until="domcontentloaded", timeout=30_000)
-        # Give MSAL init's try/catch a moment to complete (it will fail in file:// context)
         time.sleep(1.5)
-
-        print("injecting mock state")
-        page.evaluate(MOCK_INJECT_JS)
+        page.evaluate(MOCK_INJECT_JS_TEMPLATE, role_inject(role))
         time.sleep(0.5)
 
-        print("screenshot: table view (top of page)")
-        shot(page, "01_table_top", full=False)
+        print(f"  [{role}] screenshot: viewport top")
+        shot(page, f"{role}_01_top", full=False)
+        print(f"  [{role}] screenshot: full page")
+        shot(page, f"{role}_02_full", full=True)
 
-        print("screenshot: full page (table + upload card visible)")
-        shot(page, "02_full_page", full=True)
-
-        print("clicking first order to open detail panel")
-        # On mobile, the table is hidden — use card. On desktop, use table row.
+        # Click first order if there is one visible
         card = page.locator(".order-card").first
-        row = page.locator("tbody tr").first
         if card.count() > 0 and card.is_visible():
             card.click()
-        else:
-            row.click()
-        time.sleep(0.7)
-        # Scroll detail into view
-        page.evaluate("document.getElementById('detailPanel').scrollIntoView({behavior:'instant', block:'start'})")
-        time.sleep(0.4)
-        shot(page, "03_detail_panel_top", full=False)
-        shot(page, "04_detail_full", full=True)
-
-        print("\nDone. Review test/screenshots/mock_*.png")
+            time.sleep(0.7)
+            page.evaluate("document.getElementById('detailPanel').scrollIntoView({behavior:'instant', block:'start'})")
+            time.sleep(0.4)
+            print(f"  [{role}] screenshot: detail panel")
+            shot(page, f"{role}_03_detail", full=False)
         b.close()
+
+
+def main() -> None:
+    for role in ("admin", "manager", "client"):
+        print(f"\nrendering as: {role}")
+        render_role(role)
+    print(f"\nDone. Review {SHOTS}/mock_*.png")
 
 
 if __name__ == "__main__":
