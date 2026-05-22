@@ -31,6 +31,22 @@
     .table tbody tr{cursor:pointer;transition:background .15s;}
     .table tbody tr:hover{background:#eef3ff;}
     .table tbody td{padding:10px 14px;font-size:.86rem;vertical-align:middle;}
+    /* Card list (mobile only) */
+    #orderCardList{display:none;padding:0 12px 12px 12px;}
+    .order-card{background:#fff;border:1px solid #e5e9f0;border-radius:10px;padding:12px 14px;margin-top:10px;cursor:pointer;transition:box-shadow .15s, border-color .15s;}
+    .order-card:active{background:#eef3ff;}
+    .order-card .oc-top{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;}
+    .order-card .oc-id{font-weight:700;color:var(--asp-blue);font-size:.82rem;letter-spacing:.3px;}
+    .order-card .oc-event{font-weight:600;font-size:.95rem;color:#1a1a1a;margin-bottom:6px;line-height:1.25;}
+    .order-card .oc-meta{font-size:.78rem;color:#666;display:flex;flex-wrap:wrap;gap:4px 10px;}
+    .order-card .oc-meta-item{display:inline-flex;align-items:center;gap:3px;}
+    @media (max-width: 767px){
+      #orderTable{display:none;}
+      #orderCardList{display:block;}
+      .table-container > div:first-child{padding:.75rem;}
+      .table-container > div:first-child input,
+      .table-container > div:first-child select{font-size:.85rem;}
+    }
     .badge-pending{background:#e67e22;}
     .badge-active{background:#27ae60;}
     .badge-complete{background:#2980b9;}
@@ -138,12 +154,13 @@
         <button class="btn btn-sm btn-outline-secondary" onclick="loadDataFromExcel()">&#x21BB; Refresh</button>
         <span class="ms-auto text-muted small" id="rowCount"></span>
       </div>
-      <div class="table-responsive">
+      <div class="table-responsive" id="orderTable">
         <table class="table table-hover mb-0">
           <thead><tr><th>Order #</th><th>Event / Project</th><th>Start Date</th><th>Time</th><th># Guards</th><th>Site Contact</th><th>Status</th></tr></thead>
           <tbody id="orderTableBody"></tbody>
         </table>
       </div>
+      <div id="orderCardList"></div>
     </div>
 
     <div id="detailPanel" class="mb-4">
@@ -445,6 +462,24 @@ function renderTable() {
       <td><span class="badge ${badgeClass(o.Status)}">${o.Status || ''}</span></td>
     </tr>`
   ).join("");
+  // Card list rendering (visible only on mobile via CSS)
+  document.getElementById("orderCardList").innerHTML = filtered.map(o => {
+    const time = (o.StartTime || '') + (o.EndTime ? '–' + o.EndTime : '');
+    const meta = [
+      o.StartDate ? `&#x1F4C5; ${o.StartDate}` : '',
+      time ? `&#x1F552; ${time}` : '',
+      o.NumGuards ? `&#x1F46E; ${o.NumGuards} guard${o.NumGuards === 1 ? '' : 's'}` : '',
+      o.SiteContact ? `&#x1F464; ${o.SiteContact}` : ''
+    ].filter(Boolean).map(s => `<span class="oc-meta-item">${s}</span>`).join('');
+    return `<div class="order-card" onclick="selectOrder('${o.OrderID}')">
+      <div class="oc-top">
+        <span class="oc-id">${o.OrderID}</span>
+        <span class="badge ${badgeClass(o.Status)}">${o.Status || ''}</span>
+      </div>
+      <div class="oc-event">${o.Event || '<span class="text-muted">(no title)</span>'}</div>
+      <div class="oc-meta">${meta}</div>
+    </div>`;
+  }).join("");
 }
 
 function selectOrder(id) {
