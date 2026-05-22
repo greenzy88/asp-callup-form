@@ -14,13 +14,18 @@
     body{background:#f4f6f9;font-family:'Segoe UI',sans-serif;}
     .navbar{background:var(--asp-blue)!important;padding:0 1.5rem;}
     .navbar-brand{display:flex;align-items:center;gap:12px;color:#fff!important;font-weight:700;font-size:1.15rem;}
-    .stat-card{border:none;border-radius:10px;padding:1.2rem 1.5rem;color:#fff;box-shadow:0 2px 8px rgba(0,0,0,.12);}
+    .stat-card{border:none;border-radius:10px;padding:1rem .75rem;color:#fff;box-shadow:0 2px 8px rgba(0,0,0,.12);text-align:center;}
     .stat-card.total{background:var(--asp-blue);}
     .stat-card.pending{background:#e67e22;}
     .stat-card.active{background:#27ae60;}
     .stat-card.review{background:#8e44ad;}
-    .stat-number{font-size:2rem;font-weight:700;line-height:1;}
-    .stat-label{font-size:.8rem;opacity:.85;margin-top:4px;}
+    .stat-number{font-size:1.75rem;font-weight:700;line-height:1;}
+    .stat-label{font-size:.75rem;opacity:.85;margin-top:4px;text-transform:uppercase;letter-spacing:.5px;}
+    @media (min-width: 768px){
+      .stat-card{padding:1.2rem 1.5rem;text-align:left;}
+      .stat-number{font-size:2rem;}
+      .stat-label{font-size:.8rem;text-transform:none;letter-spacing:normal;}
+    }
     .table-container{background:#fff;border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,.08);overflow:hidden;}
     .table thead th{background:var(--asp-blue);color:#fff;font-size:.78rem;font-weight:600;letter-spacing:.5px;text-transform:uppercase;padding:12px 14px;border:none;}
     .table tbody tr{cursor:pointer;transition:background .15s;}
@@ -62,11 +67,17 @@
 </div>
 
 <nav class="navbar navbar-dark mb-4">
-  <a class="navbar-brand">ASP – Temporary Post Order System <span style="background:#C8A951;color:#003366;font-size:0.65rem;font-weight:700;padding:2px 8px;border-radius:20px;text-transform:uppercase;margin-left:4px;">M365 Edition</span></a>
-  <span class="text-white-50 small">Billy Bishop Toronto City Airport – BBTCA</span>
-  <div style="margin-left: auto; display: flex; align-items: center; gap: 1rem;">
-    <span class="user-badge" id="userBadge">Client (Read-Only)</span>
-    <button id="signOutBtn" class="btn btn-sm btn-light" onclick="signOut()" style="display:none;">Sign Out</button>
+  <div class="container-fluid px-3 d-flex flex-column flex-md-row align-items-md-center gap-2 py-2">
+    <div class="d-flex align-items-center flex-wrap gap-2">
+      <span class="navbar-brand m-0 d-none d-sm-inline">ASP &ndash; Temporary Post Orders</span>
+      <span class="navbar-brand m-0 d-inline d-sm-none">ASP Post Orders</span>
+      <span style="background:#C8A951;color:#003366;font-size:0.6rem;font-weight:700;padding:2px 8px;border-radius:20px;text-transform:uppercase;">M365</span>
+    </div>
+    <span class="text-white-50 small d-none d-md-inline">Billy Bishop Toronto City Airport &ndash; BBTCA</span>
+    <div class="ms-md-auto d-flex align-items-center gap-2 flex-wrap">
+      <span class="user-badge" id="userBadge">Not signed in</span>
+      <button id="signOutBtn" class="btn btn-sm btn-light" onclick="signOut()" style="display:none;">Sign Out</button>
+    </div>
   </div>
 </nav>
 
@@ -80,10 +91,10 @@
 
   <div id="appContent" style="display:none;">
 
-    <div class="row g-3 mb-4">
-      <div class="col-6 col-md-3"><div class="stat-card total"><div class="stat-number" id="statTotal">0</div><div class="stat-label">Total Orders</div></div></div>
-      <div class="col-6 col-md-3"><div class="stat-card pending"><div class="stat-number" id="statPending">0</div><div class="stat-label">Pending Review</div></div></div>
-      <div class="col-6 col-md-3"><div class="stat-card active"><div class="stat-number" id="statScheduled">0</div><div class="stat-label">Scheduled</div></div></div>
+    <div class="row g-2 g-md-3 mb-4">
+      <div class="col-4"><div class="stat-card total"><div class="stat-number" id="statTotal">0</div><div class="stat-label">Total</div></div></div>
+      <div class="col-4"><div class="stat-card pending"><div class="stat-number" id="statPending">0</div><div class="stat-label">Pending</div></div></div>
+      <div class="col-4"><div class="stat-card active"><div class="stat-number" id="statScheduled">0</div><div class="stat-label">Scheduled</div></div></div>
     </div>
 
     <div class="card mb-4 border-0 shadow-sm" id="uploadCard" style="display:none;">
