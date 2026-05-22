@@ -31,26 +31,22 @@ IPHONE_13 = {
     ),
 }
 
-def role_inject(role: str) -> str:
-    """Return JS snippet that sets the right user + delegates to detectUserRole."""
-    upn = {
-        "admin":   "dramlagan@security-asp.com",
-        "manager": "fmohammad@security-asp.com",
-        "manager2": "pdeal@security-asp.com",  # Pat — same permissions as Farhad
-        "client":  "atraining@security-asp.com",
-    }[role]
-    return f"""
-      currentUserUpn = '{upn}';
-      detectUserRole('{upn}');
-    """
+ROLE_TO_UPN = {
+    "admin":    "dramlagan@security-asp.com",
+    "manager":  "fmohammad@security-asp.com",
+    "manager2": "pdeal@security-asp.com",  # Pat — same permissions as Farhad
+    "client":   "atraining@security-asp.com",
+}
 
 
-MOCK_INJECT_JS_TEMPLATE = r"""(roleJs) => {
+MOCK_INJECT_JS_TEMPLATE = r"""(upn) => {
   // Switch to authenticated view
   document.getElementById('authSection').style.display = 'none';
   document.getElementById('appContent').style.display = 'block';
-  // Role-specific state + visibility
-  eval(roleJs);
+  // Role-specific state + visibility — delegates to the real detectUserRole
+  // so this stays in sync with production behavior. No eval() needed (CSP).
+  currentUserUpn = upn;
+  detectUserRole(upn);
 
   // Fake orders covering varied lengths + statuses
   orders = [
@@ -111,7 +107,7 @@ def render_role(role: str) -> None:
         page = ctx.new_page()
         page.goto(file_url, wait_until="domcontentloaded", timeout=30_000)
         time.sleep(1.5)
-        page.evaluate(MOCK_INJECT_JS_TEMPLATE, role_inject(role))
+        page.evaluate(MOCK_INJECT_JS_TEMPLATE, ROLE_TO_UPN[role])
         time.sleep(0.5)
 
         print(f"  [{role}] screenshot: viewport top")
