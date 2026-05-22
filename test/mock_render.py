@@ -32,30 +32,16 @@ IPHONE_13 = {
 }
 
 def role_inject(role: str) -> str:
-    """Return JS snippet that sets up the right role + visibility."""
-    if role == "admin":
-        return """
-          isManager = true; isAdmin = true;
-          document.getElementById('uploadCard').style.display = 'block';
-          document.getElementById('statusPanel').style.display = 'block';
-          document.getElementById('userBadge').textContent = 'Manager (Edit Access)';
-          currentUserUpn = 'dramlagan@security-asp.com';
-        """
-    if role == "manager":
-        return """
-          isManager = true; isAdmin = false;
-          document.getElementById('uploadCard').style.display = 'block';
-          document.getElementById('statusPanel').style.display = 'block';
-          document.getElementById('userBadge').textContent = 'Manager (Edit Access)';
-          currentUserUpn = 'fmohammad@security-asp.com';
-        """
-    # client (BBTCA / atraining@) — read-only
-    return """
-      isManager = false; isAdmin = false;
-      document.getElementById('uploadCard').style.display = 'none';
-      document.getElementById('statusPanel').style.display = 'none';
-      document.getElementById('userBadge').textContent = 'Client (Read-Only)';
-      currentUserUpn = 'atraining@security-asp.com';
+    """Return JS snippet that sets the right user + delegates to detectUserRole."""
+    upn = {
+        "admin":   "dramlagan@security-asp.com",
+        "manager": "fmohammad@security-asp.com",
+        "manager2": "pdeal@security-asp.com",  # Pat — same permissions as Farhad
+        "client":  "atraining@security-asp.com",
+    }[role]
+    return f"""
+      currentUserUpn = '{upn}';
+      detectUserRole('{upn}');
     """
 
 
@@ -146,7 +132,7 @@ def render_role(role: str) -> None:
 
 
 def main() -> None:
-    for role in ("admin", "manager", "client"):
+    for role in ("admin", "manager", "manager2", "client"):
         print(f"\nrendering as: {role}")
         render_role(role)
     print(f"\nDone. Review {SHOTS}/mock_*.png")

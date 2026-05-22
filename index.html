@@ -178,7 +178,6 @@
           <select id="newStatus" class="form-select form-select-sm mb-2">
             <option>Pending</option><option>Scheduled</option>
           </select>
-          <input type="text" id="newUpdatedBy" class="form-control form-control-sm mb-2" placeholder="Your name">
           <textarea id="newNote" class="form-control form-control-sm mb-2" rows="2" placeholder="Notes (optional)"></textarea>
           <div class="d-flex gap-2 mb-4">
             <button class="btn btn-sm" style="background:var(--asp-blue);color:#fff" onclick="updateStatus()">Save Update</button>
@@ -198,7 +197,33 @@
 const EXCEL_FILENAME = "CallUpForm_Data.xlsx";
 const FOLDER_NAME    = "ASP-CallUp";
 const OWNER_UPN      = "dramlagan@security-asp.com";
-const SHARE_WITH     = ["fmohammad@security-asp.com"];
+
+// Service providers with manager (edit) access — same permissions as Farhad
+const MANAGER_UPNS = [
+  "fmohammad@security-asp.com",
+  "pdeal@security-asp.com"
+];
+// Read-only BBTCA contacts
+const CLIENT_UPNS = [
+  "atraining@security-asp.com"
+];
+// Folder share list — anyone who needs to see/use the shared OneDrive folder
+const SHARE_WITH = [...MANAGER_UPNS, ...CLIENT_UPNS];
+
+// Email notification recipients — who gets pinged on new orders / status changes.
+// Currently David only; expand later when the team wants in.
+const NOTIFY_RECIPIENTS = ["dramlagan@security-asp.com"];
+
+// Display names used in the user badge + Status History "ChangedBy"
+const USER_DISPLAY_NAMES = {
+  "dramlagan@security-asp.com": "Admin",
+  "fmohammad@security-asp.com": "Farhad",
+  "pdeal@security-asp.com": "Pat",
+  "atraining@security-asp.com": "Client"
+};
+function displayName(upn) {
+  return USER_DISPLAY_NAMES[String(upn || "").toLowerCase()] || upn || "Unknown";
+}
 
 const msalConfig = {
   auth: {
@@ -251,16 +276,18 @@ function signOut() {
 }
 
 function detectUserRole(username) {
-  if (username.includes("fmohammad") || username.includes("dramlagan")) {
-    isManager = true;
-    document.getElementById("userBadge").textContent = "Manager (Edit Access)";
+  const upn = String(username || "").toLowerCase();
+  const managerSet = new Set([OWNER_UPN.toLowerCase(), ...MANAGER_UPNS.map(s => s.toLowerCase())]);
+  isAdmin = upn === OWNER_UPN.toLowerCase();
+  isManager = managerSet.has(upn);
+  document.getElementById("userBadge").textContent = displayName(username);
+  document.getElementById("userBadge").title = username;
+  if (isManager) {
     document.getElementById("uploadCard").style.display = "block";
     document.getElementById("statusPanel").style.display = "block";
   } else {
     document.getElementById("statusPanel").style.display = "none";
   }
-  isAdmin = username.toLowerCase() === OWNER_UPN.toLowerCase();
-  document.getElementById("userBadge").title = username;
 }
 
 // ── Shared OneDrive folder: owner creates/shares; others discover via sharedWithMe ──
@@ -627,7 +654,7 @@ function closeDetail() {
 async function updateStatus() {
   if (!selectedId) return;
   const newStatus = document.getElementById("newStatus").value;
-  const updatedBy = document.getElementById("newUpdatedBy").value.trim() || "Manager";
+  const updatedBy = displayName(currentUserUpn);
   const note = document.getElementById("newNote").value.trim();
   const order = orders.find(o => o.OrderID === selectedId);
   if (!order) return;
@@ -646,20 +673,21 @@ async function updateStatus() {
   await writeExcelFile(orders, historyEntry);
 
   if (newStatus === "Scheduled") {
-    await sendEmail("dramlagan@security-asp.com",
-      `Post Order Scheduled: ${selectedId} - ${order.Event}`,
-      `<h2>Post Order Scheduled</h2>
+    const subject = `Post Order Scheduled: ${selectedId} - ${order.Event}`;
+    const body = `<h2>Post Order Scheduled</h2>
        <p><strong>Order ID:</strong> ${selectedId}</p>
        <p><strong>Event:</strong> ${order.Event}</p>
        <p><strong>Start Date:</strong> ${order.StartDate}</p>
        <p><strong>End Date:</strong> ${order.EndDate}</p>
        <p><strong>Location:</strong> ${order.Location}</p>
        <p><strong>Guards:</strong> ${order.NumGuards}</p>
-       <p>Your temporary post order has been scheduled and approved. Please confirm receipt.</p>`
-    );
+       <p><strong>Updated by:</strong> ${updatedBy}</p>
+       <p>Your temporary post order has been scheduled and approved. Please confirm receipt.</p>`;
+    for (const recipient of NOTIFY_RECIPIENTS) {
+      await sendEmail(recipient, subject, body);
+    }
   }
 
-  document.getElementById("newUpdatedBy").value = "";
   document.getElementById("newNote").value = "";
   await selectOrder(selectedId);
 }
@@ -820,7 +848,7 @@ async function addExtractedOrder() {
     Coverage: document.getElementById("ef_coverage").value || "",
     PPERequired: document.getElementById("ef_ppe").value || "",
     Duties: document.getElementById("ef_duties").value || "",
-    Status: "Pending", UpdatedBy: "PDF Upload",
+    Status: "Pending", UpdatedBy: `${displayName(currentUserUpn)} (PDF Upload)`,
     LastUpdated: new Date().toLocaleString(),
     Archived: "No", PDFFilename: pdfFilename
   };
@@ -828,14 +856,13 @@ async function addExtractedOrder() {
 
   const historyEntry = {
     OrderID: newOrderID, Status: "Pending",
-    ChangedBy: "PDF Upload", Timestamp: new Date().toLocaleString(),
+    ChangedBy: `${displayName(currentUserUpn)} (PDF Upload)`, Timestamp: new Date().toLocaleString(),
     Notes: "Order created from PDF upload"
   };
   await writeExcelFile(orders, historyEntry);
 
-  await sendEmail("dramlagan@security-asp.com",
-    `New Temporary Post Order Submitted: ${newOrderID}`,
-    `<h2>New Temporary Post Order</h2>
+  const newSubject = `New Temporary Post Order Submitted: ${newOrderID}`;
+  const newBody = `<h2>New Temporary Post Order</h2>
      <p><strong>Order ID:</strong> ${newOrderID}</p>
      <p><strong>Event:</strong> ${newOrder.Event}</p>
      <p><strong>Start Date:</strong> ${newOrder.StartDate}</p>
@@ -843,8 +870,11 @@ async function addExtractedOrder() {
      <p><strong>Guards:</strong> ${newOrder.NumGuards}</p>
      <p><strong>Location:</strong> ${newOrder.Location}</p>
      <p><strong>Site Contact:</strong> ${newOrder.SiteContact}</p>
-     <p>Please review and update the status in the ASP Call Up Form system.</p>`
-  );
+     <p><strong>Uploaded by:</strong> ${displayName(currentUserUpn)}</p>
+     <p>Please review and update the status in the ASP Call Up Form system.</p>`;
+  for (const recipient of NOTIFY_RECIPIENTS) {
+    await sendEmail(recipient, newSubject, newBody);
+  }
 
   document.getElementById("extractedCard").style.display = "none";
   window.uploadedPDFFile = null;
