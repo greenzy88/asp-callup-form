@@ -119,15 +119,24 @@ def render_role(role: str) -> None:
         print(f"  [{role}] screenshot: full page")
         shot(page, f"{role}_02_full", full=True)
 
-        # Click first order if there is one visible
         card = page.locator(".order-card").first
         if card.count() > 0 and card.is_visible():
             card.click()
             time.sleep(0.7)
             page.evaluate("document.getElementById('detailPanel').scrollIntoView({behavior:'instant', block:'start'})")
             time.sleep(0.4)
-            print(f"  [{role}] screenshot: detail panel")
-            shot(page, f"{role}_03_detail", full=False)
+            print(f"  [{role}] screenshot: detail panel (read mode)")
+            shot(page, f"{role}_03_detail_read", full=True)
+
+            # If the Edit Fields button exists, click it and screenshot edit mode
+            edit_btn = page.locator("button:has-text('Edit Fields')").first
+            if edit_btn.count() > 0 and edit_btn.is_visible():
+                edit_btn.click()
+                time.sleep(0.4)
+                page.evaluate("document.getElementById('detailPanel').scrollIntoView({behavior:'instant', block:'start'})")
+                time.sleep(0.3)
+                print(f"  [{role}] screenshot: detail panel (EDIT mode)")
+                shot(page, f"{role}_04_detail_edit", full=True)
         b.close()
 
 

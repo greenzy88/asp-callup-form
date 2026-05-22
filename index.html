@@ -174,15 +174,17 @@
           <div id="detailFields"></div>
         </div>
         <div class="col-md-6 p-4" id="statusPanel">
-          <h6 class="fw-bold mb-3" style="color:var(--asp-blue)">Update Status</h6>
-          <select id="newStatus" class="form-select form-select-sm mb-2">
-            <option>Pending</option><option>Scheduled</option>
-          </select>
-          <textarea id="newNote" class="form-control form-control-sm mb-2" rows="2" placeholder="Notes (optional)"></textarea>
-          <div class="d-flex gap-2 mb-4">
-            <button class="btn btn-sm" style="background:var(--asp-blue);color:#fff" onclick="updateStatus()">Save Update</button>
-            <button class="btn btn-sm btn-warning" id="archiveBtn" onclick="archiveOrder()" style="display:none;">&#x1F4E6; Archive</button>
-            <button class="btn btn-sm btn-danger" id="deleteBtn" onclick="deleteOrder()" style="display:none;">&#x1F5D1; Delete</button>
+          <div id="statusUpdateForm">
+            <h6 class="fw-bold mb-3" style="color:var(--asp-blue)">Update Status</h6>
+            <select id="newStatus" class="form-select form-select-sm mb-2">
+              <option>Pending</option><option>Scheduled</option>
+            </select>
+            <textarea id="newNote" class="form-control form-control-sm mb-2" rows="2" placeholder="Notes (optional)"></textarea>
+            <div class="d-flex gap-2 mb-4">
+              <button class="btn btn-sm" style="background:var(--asp-blue);color:#fff" onclick="updateStatus()">Save Update</button>
+              <button class="btn btn-sm btn-warning" id="archiveBtn" onclick="archiveOrder()" style="display:none;">&#x1F4E6; Archive</button>
+              <button class="btn btn-sm btn-danger" id="deleteBtn" onclick="deleteOrder()" style="display:none;">&#x1F5D1; Delete</button>
+            </div>
           </div>
           <h6 class="fw-bold mb-2" style="color:var(--asp-blue)">Status History</h6>
           <div id="historyLog"></div>
@@ -225,6 +227,10 @@ function displayName(upn) {
   return USER_DISPLAY_NAMES[String(upn || "").toLowerCase()] || upn || "Unknown";
 }
 
+function escAttr(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
+
 const msalConfig = {
   auth: {
     clientId: "47a13aa4-d214-4987-a6c8-472cc0161f67",
@@ -239,6 +245,7 @@ const loginRequest = { scopes: ["Files.ReadWrite", "Mail.Send"] };
 let msalInstance, accessToken = null;
 let sharedDriveId = null, sharedFolderId = null, currentUserUpn = "";
 let orders = [], statusHistory = [], selectedId = null, isManager = false, isAdmin = false;
+let isEditingFields = false;
 
 try {
   msalInstance = new msal.PublicClientApplication(msalConfig);
@@ -278,16 +285,18 @@ function signOut() {
 function detectUserRole(username) {
   const upn = String(username || "").toLowerCase();
   const managerSet = new Set([OWNER_UPN.toLowerCase(), ...MANAGER_UPNS.map(s => s.toLowerCase())]);
+  const clientSet = new Set(CLIENT_UPNS.map(s => s.toLowerCase()));
   isAdmin = upn === OWNER_UPN.toLowerCase();
   isManager = managerSet.has(upn);
+  const isAuthenticated = isManager || clientSet.has(upn);
   document.getElementById("userBadge").textContent = displayName(username);
   document.getElementById("userBadge").title = username;
-  if (isManager) {
-    document.getElementById("uploadCard").style.display = "block";
-    document.getElementById("statusPanel").style.display = "block";
-  } else {
-    document.getElementById("statusPanel").style.display = "none";
-  }
+  // Upload + status panel (with history) visible to ALL authenticated users.
+  // The status-update form within statusPanel is gated separately below.
+  document.getElementById("uploadCard").style.display = isAuthenticated ? "block" : "none";
+  document.getElementById("statusPanel").style.display = isAuthenticated ? "block" : "none";
+  const statusForm = document.getElementById("statusUpdateForm");
+  if (statusForm) statusForm.style.display = isManager ? "block" : "none";
 }
 
 // ── Shared OneDrive folder: owner creates/shares; others discover via sharedWithMe ──
@@ -546,26 +555,67 @@ function selectOrder(id) {
     ? `<div class="field-row"><span class="field-label">PDF</span><span class="field-value"><a href="#" onclick="downloadPDF('${o.PDFFilename}'); return false;" style="color:#003366;text-decoration:underline;">View PDF</a></span></div>`
     : '';
 
-  const row = (label, value) => (value !== '' && value !== null && value !== undefined)
-    ? `<div class="field-row"><span class="field-label">${label}</span><span class="field-value">${value}</span></div>` : '';
-  const dutiesBlock = (o.Duties && String(o.Duties).trim())
-    ? `<div class="mt-3"><div class="field-label mb-1">Duties</div><div style="font-size:.83rem;color:#333;line-height:1.6">${o.Duties}</div></div>` : '';
-  document.getElementById("detailFields").innerHTML = [
-    row("Event", o.Event),
-    row("Start Date", o.StartDate),
-    row("End Date", o.EndDate && o.EndDate !== o.StartDate ? o.EndDate : ''),
-    row("Start Time", o.StartTime),
-    row("End Time", o.EndTime),
-    row("Days", o.Days),
-    row("Coverage", o.Coverage),
-    row("Guards", o.NumGuards),
-    row("Location", o.Location),
-    row("Contact", o.SiteContact),
-    row("Phone", o.ContactNumber),
-    `<div class="field-row"><span class="field-label">PPE</span><span class="field-value" style="text-align:left">${ppeHtml}</span></div>`,
-    pdfLink,
-    dutiesBlock
-  ].join("");
+  // Anyone authenticated (admin, manager, client) can edit fields
+  const upn = String(currentUserUpn || "").toLowerCase();
+  const canEdit = isManager || CLIENT_UPNS.map(s => s.toLowerCase()).includes(upn);
+
+  let headerHtml = '';
+  if (canEdit) {
+    headerHtml = isEditingFields
+      ? `<div class="d-flex gap-2 mb-3 flex-wrap">
+           <button class="btn btn-sm" style="background:var(--asp-blue);color:#fff" onclick="saveFieldChanges()">&#x2713; Save Changes</button>
+           <button class="btn btn-sm btn-outline-secondary" onclick="cancelFieldChanges()">Cancel</button>
+         </div>`
+      : `<div class="mb-3">
+           <button class="btn btn-sm btn-outline-primary" onclick="editFields()">&#x270E; Edit Fields</button>
+         </div>`;
+  }
+
+  if (isEditingFields) {
+    const editRow = (label, id, value) =>
+      `<div class="field-row" style="flex-direction:column;align-items:stretch;gap:4px;">
+         <span class="field-label">${label}</span>
+         <input class="form-control form-control-sm" id="${id}" value="${escAttr(value || '')}">
+       </div>`;
+    document.getElementById("detailFields").innerHTML = headerHtml + [
+      editRow("Event",       "edit_event",         o.Event),
+      editRow("Start Date",  "edit_startDate",     o.StartDate),
+      editRow("End Date",    "edit_endDate",       o.EndDate),
+      editRow("Start Time",  "edit_startTime",     o.StartTime),
+      editRow("End Time",    "edit_endTime",       o.EndTime),
+      editRow("Days",        "edit_days",          o.Days),
+      editRow("Coverage",    "edit_coverage",      o.Coverage),
+      editRow("Guards",      "edit_numGuards",     o.NumGuards),
+      editRow("Location",    "edit_location",      o.Location),
+      editRow("Contact",     "edit_siteContact",   o.SiteContact),
+      editRow("Phone",       "edit_contactNumber", o.ContactNumber),
+      editRow("PPE (comma-separated)", "edit_ppe", o.PPERequired),
+      pdfLink,
+      `<div class="mt-3"><div class="field-label mb-1">Duties</div>
+         <textarea class="form-control form-control-sm" id="edit_duties" rows="3">${escAttr(o.Duties || '')}</textarea></div>`
+    ].join("");
+  } else {
+    const row = (label, value) => (value !== '' && value !== null && value !== undefined)
+      ? `<div class="field-row"><span class="field-label">${label}</span><span class="field-value">${value}</span></div>` : '';
+    const dutiesBlock = (o.Duties && String(o.Duties).trim())
+      ? `<div class="mt-3"><div class="field-label mb-1">Duties</div><div style="font-size:.83rem;color:#333;line-height:1.6">${o.Duties}</div></div>` : '';
+    document.getElementById("detailFields").innerHTML = headerHtml + [
+      row("Event", o.Event),
+      row("Start Date", o.StartDate),
+      row("End Date", o.EndDate && o.EndDate !== o.StartDate ? o.EndDate : ''),
+      row("Start Time", o.StartTime),
+      row("End Time", o.EndTime),
+      row("Days", o.Days),
+      row("Coverage", o.Coverage),
+      row("Guards", o.NumGuards),
+      row("Location", o.Location),
+      row("Contact", o.SiteContact),
+      row("Phone", o.ContactNumber),
+      `<div class="field-row"><span class="field-label">PPE</span><span class="field-value" style="text-align:left">${ppeHtml}</span></div>`,
+      pdfLink,
+      dutiesBlock
+    ].join("");
+  }
 
   // Render status history for this order
   const history = statusHistory.filter(h => h.OrderID === id);
@@ -648,7 +698,100 @@ async function downloadPDF(filename) {
 function closeDetail() {
   document.getElementById("detailPanel").style.display = "none";
   selectedId = null;
+  isEditingFields = false;
   renderTable();
+}
+
+function editFields() {
+  if (!selectedId) return;
+  isEditingFields = true;
+  selectOrder(selectedId);
+}
+
+function cancelFieldChanges() {
+  isEditingFields = false;
+  if (selectedId) selectOrder(selectedId);
+}
+
+async function saveFieldChanges() {
+  if (!selectedId) return;
+  const order = orders.find(o => o.OrderID === selectedId);
+  if (!order) return;
+  const author = displayName(currentUserUpn);
+  const ts = new Date().toLocaleString();
+
+  // Mapping: input id → order field name
+  const fieldMap = {
+    edit_event:         "Event",
+    edit_startDate:     "StartDate",
+    edit_endDate:       "EndDate",
+    edit_startTime:     "StartTime",
+    edit_endTime:       "EndTime",
+    edit_days:          "Days",
+    edit_coverage:      "Coverage",
+    edit_numGuards:     "NumGuards",
+    edit_location:      "Location",
+    edit_siteContact:   "SiteContact",
+    edit_contactNumber: "ContactNumber",
+    edit_ppe:           "PPERequired",
+    edit_duties:        "Duties"
+  };
+
+  const changes = [];
+  for (const [inputId, fieldName] of Object.entries(fieldMap)) {
+    const el = document.getElementById(inputId);
+    if (!el) continue;
+    const newVal = String(el.value || "").trim();
+    const oldVal = String(order[fieldName] || "").trim();
+    if (newVal !== oldVal) {
+      changes.push({ field: fieldName, oldVal, newVal });
+      order[fieldName] = newVal;
+    }
+  }
+
+  if (changes.length === 0) {
+    isEditingFields = false;
+    selectOrder(selectedId);
+    return;
+  }
+
+  // Append one history entry per changed field (clearly timestamped + authored)
+  for (const c of changes) {
+    statusHistory.push({
+      OrderID: selectedId,
+      Status: "Field Updated",
+      ChangedBy: author,
+      Timestamp: ts,
+      Notes: `${c.field}: "${c.oldVal}" → "${c.newVal}"`
+    });
+  }
+
+  order.UpdatedBy = author;
+  order.LastUpdated = ts;
+
+  // Persist with forceHistoryRewrite=true so the new history entries hit the sheet
+  await writeExcelFile(orders, null, true);
+
+  // Notify the admin (NOTIFY_RECIPIENTS — currently just David)
+  const summary = changes
+    .map(c => `<li><strong>${c.field}:</strong> "${escAttr(c.oldVal)}" → "${escAttr(c.newVal)}"</li>`)
+    .join("");
+  const subject = `Order Fields Edited: ${selectedId} — ${order.Event || ''}`;
+  const body = `<h2>Post Order Fields Updated</h2>
+     <p><strong>Order ID:</strong> ${selectedId}</p>
+     <p><strong>Event:</strong> ${order.Event || ''}</p>
+     <p><strong>Edited by:</strong> ${author}</p>
+     <p><strong>Timestamp:</strong> ${ts}</p>
+     <p><strong>Changes:</strong></p>
+     <ul>${summary}</ul>`;
+  for (const recipient of NOTIFY_RECIPIENTS) {
+    await sendEmail(recipient, subject, body);
+  }
+
+  isEditingFields = false;
+  // writeExcelFile already reloaded data via loadDataFromExcel.
+  // selectOrder re-renders the detail panel in read mode.
+  selectOrder(selectedId);
 }
 
 async function updateStatus() {
