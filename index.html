@@ -347,7 +347,32 @@ function loginPopup() {
         }
       }, 5 * 60 * 1000);
     }
+    // 2026-05-25 — every 10 min, poll /api/auth/status to detect when
+    // the owner's stored refresh token has expired. The standard
+    // /api/orders error path also surfaces this, but this poll lets
+    // the banner appear BEFORE a user clicks Save.
+    if (!window._authStatusPollHandle) {
+      window._authStatusPollHandle = setInterval(checkOwnerAuthStatus, 10 * 60 * 1000);
+      checkOwnerAuthStatus();
+    }
   }).catch(e => { alert("Login failed: " + e.message); });
+}
+
+async function checkOwnerAuthStatus() {
+  try {
+    const r = await fetch("/api/auth/status");
+    if (!r.ok) return;
+    const j = await r.json();
+    if (j && j.ready === false) {
+      const owner = (j.capturedBy && j.capturedBy.split("@")[0]) || "David";
+      showHealthBanner(
+        `Owner re-authentication needed. ${owner} must visit /api/auth/setup ` +
+        `on this site to restore the OneDrive connection. Until then, saves will fail.`
+      );
+    }
+  } catch (_) {
+    // Network failure — don't spam the user; the next periodic tick will retry.
+  }
 }
 
 // All function backend calls go through this helper. Adds Authorization

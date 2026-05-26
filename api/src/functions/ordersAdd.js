@@ -7,6 +7,7 @@ const { canEdit } = require("../shared/roles");
 const {
   readSheet, writeSheet, workbookItemId,
   ORDERS_HEADERS, HISTORY_HEADERS,
+  snapshotSheet, pruneSnapshots, antiWipeOrThrow,
 } = require("../shared/graph");
 
 app.http("ordersAdd", {
@@ -55,8 +56,14 @@ app.http("ordersAdd", {
         Notes: body.historyNote || "Order created from PDF upload",
       });
 
+      // ADD is a growing operation; antiWipe is satisfied automatically
+      // but snapshot still helps recovery in case of bad data.
+      await snapshotSheet(itemId, "Orders", "Orders_Backup");
+      await snapshotSheet(itemId, "StatusHistory", "History_Backup");
       await writeSheet(itemId, "Orders", orderRows, ORDERS_HEADERS);
       await writeSheet(itemId, "StatusHistory", histRows, HISTORY_HEADERS);
+      pruneSnapshots(itemId, "Orders_Backup").catch(() => {});
+      pruneSnapshots(itemId, "History_Backup").catch(() => {});
 
       return { status: 200, jsonBody: { ok: true, order } };
     } catch (e) {

@@ -7,6 +7,7 @@ const { canManageStatus } = require("../shared/roles");
 const {
   readSheet, writeSheet, workbookItemId,
   ORDERS_HEADERS, HISTORY_HEADERS,
+  snapshotSheet, pruneSnapshots, antiWipeOrThrow,
 } = require("../shared/graph");
 
 app.http("orderUpdate", {
@@ -56,8 +57,14 @@ app.http("orderUpdate", {
         });
       }
 
+      // Row count should equal baseline (update, not add/delete).
+      antiWipeOrThrow("Orders", orderRows.length, orders.filter(isReal).length, false);
+      await snapshotSheet(itemId, "Orders", "Orders_Backup");
+      await snapshotSheet(itemId, "StatusHistory", "History_Backup");
       await writeSheet(itemId, "Orders", orderRows, ORDERS_HEADERS);
       await writeSheet(itemId, "StatusHistory", histRows, HISTORY_HEADERS);
+      pruneSnapshots(itemId, "Orders_Backup").catch(() => {});
+      pruneSnapshots(itemId, "History_Backup").catch(() => {});
 
       return { status: 200, jsonBody: { ok: true, order: after } };
     } catch (e) {

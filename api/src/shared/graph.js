@@ -44,7 +44,9 @@ async function getOwnerAccessToken() {
 
 // Generic fetch wrapper: prepends owner's bearer + base URL when given
 // a relative path. Returns the raw Response for the caller to handle.
-async function graphFetch(pathOrUrl, init) {
+// 2026-05-25 hardening: retries on transient 429 / 5xx responses with
+// exponential backoff. Honours the Retry-After header when present.
+async function graphFetch(pathOrUrl, init, attempt = 0) {
   const accessToken = await getOwnerAccessToken();
   const url = pathOrUrl.startsWith("http")
     ? pathOrUrl
@@ -52,8 +54,28 @@ async function graphFetch(pathOrUrl, init) {
   const headers = Object.assign({}, (init && init.headers) || {}, {
     Authorization: `Bearer ${accessToken}`,
   });
-  return fetch(url, Object.assign({}, init || {}, { headers }));
+  let r;
+  try {
+    r = await fetch(url, Object.assign({}, init || {}, { headers }));
+  } catch (netErr) {
+    // Network failure: retry up to 3 times with backoff.
+    if (attempt < 3) {
+      await sleep(250 * Math.pow(2, attempt));
+      return graphFetch(pathOrUrl, init, attempt + 1);
+    }
+    throw netErr;
+  }
+  // Retry once on 429 / 5xx (except 501 Not Implemented).
+  if ((r.status === 429 || (r.status >= 500 && r.status !== 501)) && attempt < 3) {
+    const ra = parseInt(r.headers.get("retry-after") || "", 10);
+    const wait = Number.isFinite(ra) && ra > 0 && ra < 60 ? ra * 1000 : (500 * Math.pow(2, attempt));
+    await sleep(wait);
+    return graphFetch(pathOrUrl, init, attempt + 1);
+  }
+  return r;
 }
+
+function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
 async function graphJson(pathOrUrl, init) {
   const r = await graphFetch(pathOrUrl, init);
@@ -126,6 +148,65 @@ async function readSheet(itemId, sheetName) {
   return rows;
 }
 
+// Backup worksheet copy. Used pre-write to ensure we never destroy
+// data. Best-effort: if the copy fails we still proceed (we'd rather
+// risk losing yesterday's snapshot than refuse a save).
+async function snapshotSheet(itemId, srcSheet, prefix) {
+  try {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    const name = `${prefix}_${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+    const r = await graphFetch(
+      `/me/drive/items/${itemId}/workbook/worksheets('${encodeURIComponent(srcSheet)}')/copy`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      }
+    );
+    return r.ok;
+  } catch (_) {
+    return false;
+  }
+}
+
+// Prune snapshots older than the most recent N per prefix.
+const BACKUP_KEEP = 10;
+async function pruneSnapshots(itemId, prefix) {
+  try {
+    const list = await graphJson(`/me/drive/items/${itemId}/workbook/worksheets`);
+    const matches = (list.value || [])
+      .filter((s) => s.name && s.name.startsWith(prefix + "_"))
+      .sort((a, b) => a.name < b.name ? 1 : -1);
+    const toDelete = matches.slice(BACKUP_KEEP);
+    for (const sheet of toDelete) {
+      await graphFetch(
+        `/me/drive/items/${itemId}/workbook/worksheets('${encodeURIComponent(sheet.name)}')`,
+        { method: "DELETE" }
+      ).catch(() => {});
+    }
+  } catch (_) {
+    // Pruning is best-effort, never blocks.
+  }
+}
+
+// Server-side anti-wipe sanity. If proposed rows < 50% of baseline AND
+// baseline had >2 rows, refuse the save. Caller must explicitly opt
+// out (e.g., orderDelete passes allowShrink=true).
+function antiWipeOrThrow(label, proposedCount, baselineCount, allowShrink) {
+  if (allowShrink) return;
+  if (baselineCount <= 2) return;
+  if (proposedCount >= baselineCount * 0.5) return;
+  const e = new Error(
+    `Anti-wipe guard refused write to ${label}: ` +
+    `would shrink rows from ${baselineCount} to ${proposedCount}. ` +
+    `Pass allowShrink=true to override.`
+  );
+  e.status = 409;
+  e.code = "ANTI_WIPE_REFUSED";
+  throw e;
+}
+
 // Write rows to a worksheet by clearing then re-writing the used range.
 async function writeSheet(itemId, sheetName, rows, headerOrder) {
   const base = `/me/drive/items/${itemId}/workbook/worksheets('${encodeURIComponent(sheetName)}')`;
@@ -175,4 +256,5 @@ async function writeSheet(itemId, sheetName, rows, headerOrder) {
 module.exports = {
   getOwnerAccessToken, graphFetch, graphJson, workbookItemId,
   readSheet, writeSheet, ORDERS_HEADERS, HISTORY_HEADERS,
+  snapshotSheet, pruneSnapshots, antiWipeOrThrow,
 };

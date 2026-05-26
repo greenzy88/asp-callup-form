@@ -6,6 +6,7 @@ const { canManageStatus } = require("../shared/roles");
 const {
   readSheet, writeSheet, workbookItemId,
   ORDERS_HEADERS, HISTORY_HEADERS,
+  snapshotSheet, pruneSnapshots,
 } = require("../shared/graph");
 
 app.http("orderDelete", {
@@ -29,8 +30,15 @@ app.http("orderDelete", {
       const keptOrders = orders.filter(isReal).filter((o) => String(o.OrderID) !== String(orderId));
       const keptHist = history.filter(isReal).filter((h) => String(h.OrderID) !== String(orderId));
 
+      // Delete-by-id is allowed to shrink by exactly one row. Anti-wipe
+      // off — but we still snapshot first so an accidental DELETE is
+      // recoverable by renaming the backup sheet.
+      await snapshotSheet(itemId, "Orders", "Orders_Backup");
+      await snapshotSheet(itemId, "StatusHistory", "History_Backup");
       await writeSheet(itemId, "Orders", keptOrders, ORDERS_HEADERS);
       await writeSheet(itemId, "StatusHistory", keptHist, HISTORY_HEADERS);
+      pruneSnapshots(itemId, "Orders_Backup").catch(() => {});
+      pruneSnapshots(itemId, "History_Backup").catch(() => {});
 
       return { status: 200, jsonBody: { ok: true, removed: orderId } };
     } catch (e) {
