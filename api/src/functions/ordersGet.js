@@ -1,28 +1,8 @@
-// GET /api/orders
-// Returns the Orders + StatusHistory worksheets as JSON.
+// GET /api/orders — list orders + status history (filtered to real rows).
 
 const { app } = require("@azure/functions");
 const { requireUser } = require("../shared/auth");
-const { graphJson, workbookItemId } = require("../shared/graph");
-
-async function readSheet(itemId, sheetName) {
-  const body = await graphJson(
-    `/me/drive/items/${itemId}/workbook/worksheets('${encodeURIComponent(sheetName)}')/usedRange?$select=values`
-  );
-  const values = body.values || [];
-  if (values.length < 1) return [];
-  const headers = values[0].map((h) => String(h));
-  const rows = [];
-  for (let i = 1; i < values.length; i++) {
-    const row = values[i];
-    const obj = {};
-    for (let c = 0; c < headers.length; c++) {
-      obj[headers[c]] = row[c] !== undefined && row[c] !== null ? row[c] : "";
-    }
-    rows.push(obj);
-  }
-  return rows;
-}
+const { readSheet, workbookItemId } = require("../shared/graph");
 
 app.http("ordersGet", {
   route: "orders",

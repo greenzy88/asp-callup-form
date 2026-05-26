@@ -82,4 +82,97 @@ async function workbookItemId(filename) {
   return _workbookItemId;
 }
 
-module.exports = { getOwnerAccessToken, graphFetch, graphJson, workbookItemId };
+// Spreadsheet helpers — used by the orders endpoints.
+
+const ORDERS_HEADERS = [
+  "OrderID","Event","StartDate","EndDate","StartTime","EndTime",
+  "Days","Coverage","NumGuards","Location","SiteContact",
+  "ContactNumber","PPERequired","Duties","Status",
+  "UpdatedBy","LastUpdated","Archived","PDFFilename",
+];
+const HISTORY_HEADERS = ["OrderID","Status","ChangedBy","Timestamp","Notes"];
+
+function colLetter(zeroBased) {
+  let n = zeroBased + 1, s = "";
+  while (n > 0) {
+    const r = (n - 1) % 26;
+    s = String.fromCharCode(65 + r) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
+}
+
+async function readSheet(itemId, sheetName) {
+  const body = await graphJson(
+    `/me/drive/items/${itemId}/workbook/worksheets('${encodeURIComponent(sheetName)}')/usedRange?$select=values`
+  ).catch((e) => {
+    // empty / missing → return null so caller can treat as empty.
+    if (e.status === 404 || (e.graph && e.graph.code === "ItemNotFound")) return null;
+    throw e;
+  });
+  if (!body) return [];
+  const values = body.values || [];
+  if (values.length < 1) return [];
+  const headers = values[0].map((h) => String(h));
+  const rows = [];
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
+    const obj = {};
+    for (let c = 0; c < headers.length; c++) {
+      obj[headers[c]] = row[c] !== undefined && row[c] !== null ? row[c] : "";
+    }
+    rows.push(obj);
+  }
+  return rows;
+}
+
+// Write rows to a worksheet by clearing then re-writing the used range.
+async function writeSheet(itemId, sheetName, rows, headerOrder) {
+  const base = `/me/drive/items/${itemId}/workbook/worksheets('${encodeURIComponent(sheetName)}')`;
+  // 1) Clear current used range (no-op if empty).
+  try {
+    await graphFetch(`${base}/usedRange/clear`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ applyTo: "contents" }),
+    }).then(async (r) => {
+      if (!r.ok && r.status !== 404) {
+        const txt = await r.text();
+        throw new Error(`clear used range failed: ${r.status} ${txt.slice(0, 200)}`);
+      }
+    });
+  } catch (e) {
+    // benign on empty sheet
+  }
+
+  // 2) Build a values matrix and PATCH a single rectangular range.
+  const values = [headerOrder.slice()];
+  for (const row of rows) {
+    const r = [];
+    for (const h of headerOrder) {
+      const v = row[h];
+      r.push(v !== undefined && v !== null ? v : "");
+    }
+    values.push(r);
+  }
+  const lastCol = colLetter(headerOrder.length - 1);
+  const lastRow = values.length;
+  const addr = `A1:${lastCol}${lastRow}`;
+  const r = await graphFetch(
+    `${base}/range(address='${addr}')`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ values }),
+    }
+  );
+  if (!r.ok) {
+    const txt = await r.text();
+    throw new Error(`writeSheet PATCH failed: ${r.status} ${txt.slice(0, 200)}`);
+  }
+}
+
+module.exports = {
+  getOwnerAccessToken, graphFetch, graphJson, workbookItemId,
+  readSheet, writeSheet, ORDERS_HEADERS, HISTORY_HEADERS,
+};

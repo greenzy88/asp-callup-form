@@ -47,16 +47,15 @@ async function requireUser(req) {
   }
   const token = raw.replace(/^Bearer\s+/i, "").trim();
 
-  // Verify signature + standard claims. We DON'T enforce aud strictly
-  // because MSAL.js for SPAs by default issues tokens for MS Graph,
-  // not for our own app — and that's the token the SPA can produce
-  // without admin-consent gymnastics. Instead we trust the issuer +
-  // tenant claim and use the token only as proof-of-identity.
+  // Validate as an ID token: audience must be our app's clientId.
+  // (We use ID tokens, not Graph access tokens, because access tokens
+  // for v2 endpoints aren't generally validatable outside MS services.)
   let payload;
   try {
     payload = await new Promise((resolve, reject) => {
       jwt.verify(token, getKey, {
         algorithms: ["RS256"],
+        audience: config.clientId(),
         issuer: [
           `https://login.microsoftonline.com/${config.tenantId()}/v2.0`,
           `https://sts.windows.net/${config.tenantId()}/`,
