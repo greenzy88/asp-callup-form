@@ -457,19 +457,73 @@ async function sendEmail(recipient, subject, body) {
 }
 
 // ── Excel read/write (shared OneDrive ASP-CallUp folder) ──
+// 2026-05-25 — pulled out of loadDataFromExcel + writeExcelFile so both
+// share the same fetch strategy. Uses the same CORS-clean pattern as
+// downloadPDF: get metadata to grab @microsoft.graph.downloadUrl, then
+// fetch THAT (no auth header — URL is pre-signed). Returns the
+// ArrayBuffer of the file content, OR null on 404 (file doesn't exist
+// yet — caller should create one). Throws on any other failure so the
+// caller can refuse to overwrite with corrupted in-memory state.
+async function fetchFileBytes(filename) {
+  const metaUrl = fileMetadataUrl(filename);
+  if (!metaUrl) {
+    throw new Error("Shared folder not initialized — cannot fetch " + filename);
+  }
+  const metaResp = await fetch(metaUrl, {
+    headers: { "Authorization": `Bearer ${accessToken}` }
+  });
+  if (metaResp.status === 404) return null;  // file doesn't exist yet
+  if (!metaResp.ok) {
+    throw new Error(
+      `Graph metadata fetch HTTP ${metaResp.status} for ${filename}`
+    );
+  }
+  const meta = await metaResp.json();
+  const downloadUrl = meta["@microsoft.graph.downloadUrl"];
+  if (!downloadUrl) {
+    throw new Error(
+      `Graph metadata missing @microsoft.graph.downloadUrl for ${filename}`
+    );
+  }
+  const fileResp = await fetch(downloadUrl);
+  if (!fileResp.ok) {
+    throw new Error(
+      `Pre-signed downloadUrl GET HTTP ${fileResp.status} for ${filename}`
+    );
+  }
+  return await fileResp.arrayBuffer();
+}
+
+// Tracks whether the most recent loadDataFromExcel succeeded. If load
+// failed (CORS, network, parse), writeExcelFile MUST NOT overwrite the
+// remote file with potentially-empty in-memory data — that's how the
+// "list disappears after refresh" bug becomes a permanent data wipe.
+let lastLoadSucceeded = false;
+
 async function loadDataFromExcel() {
   if (!sharedFolderId) { console.error("Shared folder not initialized"); return; }
   try {
     showLoading("Loading orders...");
-    const r = await fetch(fileUrl(EXCEL_FILENAME), {
-      headers: { "Authorization": `Bearer ${accessToken}` }
-    });
-    if (r.status === 404 || r.status === 400) {
+    let buf;
+    try {
+      buf = await fetchFileBytes(EXCEL_FILENAME);
+    } catch(fetchErr) {
+      hideLoading();
+      console.error("loadDataFromExcel fetch error:", fetchErr);
+      alert(
+        "Couldn't load orders from OneDrive.\n\n" +
+        fetchErr.message + "\n\n" +
+        "Your data on OneDrive is NOT lost — this is just a read error. " +
+        "Refresh the page or contact David. " +
+        "Saves are disabled until the load succeeds."
+      );
+      lastLoadSucceeded = false;
+      return;
+    }
+    if (buf === null) {
       await createNewExcelFile();
       return;
     }
-    if (!r.ok) { console.error("Load error:", r.status); hideLoading(); return; }
-    const buf = await r.arrayBuffer();
     const wb = XLSX.read(buf, { type: "array" });
     const rawOrders = XLSX.utils.sheet_to_json(wb.Sheets["Orders"] || {});
     const rawHistory = XLSX.utils.sheet_to_json(wb.Sheets["StatusHistory"] || {});
@@ -479,6 +533,7 @@ async function loadDataFromExcel() {
     const isReal = o => o && o.OrderID && String(o.OrderID).trim();
     orders = rawOrders.filter(isReal);
     statusHistory = rawHistory.filter(isReal);
+    lastLoadSucceeded = true;  // gate that allows writeExcelFile to proceed
     const purgedOrders = rawOrders.length - orders.length;
     const purgedHistory = rawHistory.length - statusHistory.length;
     renderTable();
@@ -528,19 +583,49 @@ async function uploadWorkbook(wb) {
 }
 
 async function writeExcelFile(updatedOrders, newHistoryEntry, forceHistoryRewrite) {
+  // 2026-05-25 SAFETY GUARD (David: "when I refresh, the entire list
+  // disappears. This is a serious problem"): if the most recent load
+  // failed, in-memory `orders` is empty or stale and writing it would
+  // OVERWRITE the real OneDrive file with garbage. Refuse to save.
+  if (!lastLoadSucceeded) {
+    alert(
+      "Cannot save: orders haven't been loaded successfully yet.\n\n" +
+      "Refresh the page first. If the load keeps failing, contact David " +
+      "— your data on OneDrive is safe but the read is broken."
+    );
+    console.error(
+      "writeExcelFile REFUSED: lastLoadSucceeded=false. Refusing to " +
+      "overwrite remote file with potentially-empty in-memory state."
+    );
+    return;
+  }
   try {
     showLoading("Saving...");
-    // Download current workbook to preserve all sheets
-    const r = await fetch(fileUrl(EXCEL_FILENAME), {
-      headers: { "Authorization": `Bearer ${accessToken}` }
-    });
+    // Download current workbook to preserve all sheets. Use the same
+    // CORS-clean metadata→downloadUrl pattern as loadDataFromExcel.
     let wb;
-    if (r.ok) {
-      wb = XLSX.read(await r.arrayBuffer(), { type: "array" });
-    } else {
-      wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([]), "Orders");
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([]), "StatusHistory");
+    try {
+      const buf = await fetchFileBytes(EXCEL_FILENAME);
+      if (buf) {
+        wb = XLSX.read(buf, { type: "array" });
+      } else {
+        wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([]), "Orders");
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([]), "StatusHistory");
+      }
+    } catch(fetchErr) {
+      // 2026-05-25: previously this branch silently built an empty
+      // workbook and wrote it back, wiping all existing data. Now
+      // we abort so the file isn't corrupted.
+      hideLoading();
+      console.error("writeExcelFile fetch error:", fetchErr);
+      alert(
+        "Couldn't read the existing orders file to merge your change.\n\n" +
+        fetchErr.message + "\n\n" +
+        "Save was aborted to protect your OneDrive data. Refresh the " +
+        "page and try again."
+      );
+      return;
     }
     wb.Sheets["Orders"] = XLSX.utils.json_to_sheet(updatedOrders);
     if (newHistoryEntry) {
