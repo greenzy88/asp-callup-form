@@ -228,6 +228,14 @@ const EXCEL_FILENAME = "CallUpForm_Data.xlsx";
 const FOLDER_NAME    = "ASP-CallUp";
 const OWNER_UPN      = "dramlagan@security-asp.com";
 
+// 2026-05-25 — non-owner discovery uses /shares/{encoded}/driveItem.
+// This URL is David's "People in Security ASP Inc with the link can
+// edit" sharing link for the ASP-CallUp folder. Hitting Graph /shares/
+// with a base64url-encoded copy of this URL resolves to the folder
+// using the calling user's existing OneDrive share grant — no
+// Files.ReadWrite.All needed, no admin consent needed.
+const FOLDER_SHARE_URL = "https://aspsecurityinc-my.sharepoint.com/:f:/r/personal/dramlagan_security-asp_com/Documents/ASP-CallUp?csf=1&web=1&e=Rdsl1A";
+
 // Service providers with manager (edit) access — same permissions as Farhad
 const MANAGER_UPNS = [
   "fmohammad@security-asp.com",
@@ -295,14 +303,13 @@ const msalConfig = {
   cache: { cacheLocation: "localStorage", storeAuthStateInCookie: false }
 };
 
-// 2026-05-25 (David: "I did share the folder a few days ago. Does
-// something need refreshing?"): the share was fine — the bug was scope.
-// Files.ReadWrite ONLY covers the signed-in user's own drive. The
-// /me/drive/sharedWithMe endpoint + access to a remoteItem on another
-// drive both require Files.ReadWrite.All. With the narrow scope, every
-// non-owner got HTTP 403 on sharedWithMe and the app stayed in the
-// "shared folder not initialized" state silently.
-const loginRequest = { scopes: ["Files.ReadWrite.All", "Mail.Send"] };
+// 2026-05-25 — back to the narrow scope. Files.ReadWrite.All triggers
+// admin-consent in this tenant and David is not IT, so we can't get it
+// approved. Non-owner discovery now uses /shares/{encoded}/driveItem
+// (see FOLDER_SHARE_URL below + initSharedDrive non-owner branch),
+// which works with just Files.ReadWrite + the existing OneDrive
+// invite already issued to each user.
+const loginRequest = { scopes: ["Files.ReadWrite", "Mail.Send"] };
 
 let msalInstance, accessToken = null;
 let sharedDriveId = null, sharedFolderId = null, currentUserUpn = "";
@@ -428,36 +435,49 @@ async function initSharedDrive() {
     console.log("Drive: owner mode, folder =", folderId);
 
   } else {
-    // Non-owner: discover the shared folder via sharedWithMe.
+    // Non-owner: resolve the shared folder via /shares/{encoded}/driveItem.
+    // This endpoint works with Files.ReadWrite (no .All) as long as the
+    // calling user has been granted access to the share (which David did
+    // via OneDrive's Share UI). Avoids the sharedWithMe-needs-.All trap.
+    const encoded = encodeShareUrl(FOLDER_SHARE_URL);
     const r = await fetch(
-      "https://graph.microsoft.com/v1.0/me/drive/sharedWithMe",
+      `https://graph.microsoft.com/v1.0/shares/${encoded}/driveItem`,
       { headers: { "Authorization": `Bearer ${accessToken}` } }
     );
     if (!r.ok) {
-      console.error("sharedWithMe failed:", r.status);
+      const bodyText = await r.text().catch(() => "");
+      console.error("shares/driveItem failed:", r.status, bodyText);
+      let hint = "";
+      if (r.status === 403 || r.status === 401) {
+        hint = " Your account may not have been granted access to the share yet — David needs to add " +
+               currentUserUpn + " in OneDrive: right-click ASP-CallUp folder → Manage access → Grant access.";
+      } else if (r.status === 404) {
+        hint = " The sharing link in the app may have been revoked or rotated. Tell David.";
+      }
       showHealthBanner(
-        "Couldn't read sharedWithMe (HTTP " + r.status + "). " +
-        "The owner (David) may not have shared the ASP-CallUp folder with " +
-        currentUserUpn + " yet. Contact David."
+        "Couldn't resolve the shared folder (HTTP " + r.status + ")." + hint
       );
       return;
     }
-    const item = ((await r.json()).value || []).find(i =>
-      i.name === FOLDER_NAME && i.remoteItem
-    );
-    if (item) {
-      sharedDriveId  = item.remoteItem.parentReference.driveId;
-      sharedFolderId = item.remoteItem.id;
-      console.log("Drive: non-owner mode, remote drive =", sharedDriveId);
-    } else {
-      console.warn("Shared folder not found — owner may not have shared it yet.");
-      showHealthBanner(
-        "The ASP-CallUp shared folder isn't visible to " + currentUserUpn + ". " +
-        "David needs to sign in once so the share gets re-invited. " +
-        "Once that's done, refresh this page."
-      );
+    const meta = await r.json();
+    sharedDriveId  = meta.parentReference && meta.parentReference.driveId
+                      ? meta.parentReference.driveId : null;
+    sharedFolderId = meta.id || null;
+    if (!sharedDriveId || !sharedFolderId) {
+      console.error("shares/driveItem returned incomplete metadata:", meta);
+      showHealthBanner("The shared folder response was missing driveId/id. Contact David.");
+      return;
     }
+    console.log("Drive: non-owner mode via /shares/, remote drive =", sharedDriveId);
   }
+}
+
+// Base64url-encode a sharing URL for Graph's /shares/{id} endpoint.
+// Per MS docs: base64-encode, replace +/ with -_, strip trailing =,
+// prepend "u!".
+function encodeShareUrl(url) {
+  const b64 = btoa(url);
+  return "u!" + b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 function fileUrl(filename) {
