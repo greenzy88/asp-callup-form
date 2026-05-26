@@ -124,6 +124,25 @@ function colLetter(zeroBased) {
   return s;
 }
 
+// Excel returns date-formatted cells as numeric serials (days since
+// 1900-01-01, with the 1900 leap-year bug). Convert known date columns
+// back to ISO strings so the frontend doesn't render "45851" as a date.
+const DATE_ONLY_COLS = new Set(["StartDate", "EndDate"]);
+const DATE_TIME_COLS = new Set(["LastUpdated", "Timestamp"]);
+
+function excelSerialToISO(serial, dateOnly) {
+  const ms = (Number(serial) - 25569) * 86400 * 1000;
+  const d = new Date(ms);
+  if (!isFinite(d.getTime())) return String(serial);
+  if (dateOnly) {
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(d.getUTCDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  }
+  return d.toISOString();
+}
+
 async function readSheet(itemId, sheetName) {
   const body = await graphJson(
     `/me/drive/items/${itemId}/workbook/worksheets('${encodeURIComponent(sheetName)}')/usedRange?$select=values`
@@ -141,7 +160,11 @@ async function readSheet(itemId, sheetName) {
     const row = values[i];
     const obj = {};
     for (let c = 0; c < headers.length; c++) {
-      obj[headers[c]] = row[c] !== undefined && row[c] !== null ? row[c] : "";
+      let v = row[c] !== undefined && row[c] !== null ? row[c] : "";
+      if (typeof v === "number" && (DATE_ONLY_COLS.has(headers[c]) || DATE_TIME_COLS.has(headers[c]))) {
+        v = excelSerialToISO(v, DATE_ONLY_COLS.has(headers[c]));
+      }
+      obj[headers[c]] = v;
     }
     rows.push(obj);
   }
