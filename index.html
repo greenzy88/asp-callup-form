@@ -295,7 +295,14 @@ const msalConfig = {
   cache: { cacheLocation: "localStorage", storeAuthStateInCookie: false }
 };
 
-const loginRequest = { scopes: ["Files.ReadWrite", "Mail.Send"] };
+// 2026-05-25 (David: "I did share the folder a few days ago. Does
+// something need refreshing?"): the share was fine — the bug was scope.
+// Files.ReadWrite ONLY covers the signed-in user's own drive. The
+// /me/drive/sharedWithMe endpoint + access to a remoteItem on another
+// drive both require Files.ReadWrite.All. With the narrow scope, every
+// non-owner got HTTP 403 on sharedWithMe and the app stayed in the
+// "shared folder not initialized" state silently.
+const loginRequest = { scopes: ["Files.ReadWrite.All", "Mail.Send"] };
 
 let msalInstance, accessToken = null;
 let sharedDriveId = null, sharedFolderId = null, currentUserUpn = "";
