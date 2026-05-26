@@ -1,0 +1,16 @@
+{
+  "name": "asp-callup-form-api",
+  "version": "1.0.0",
+  "description": "Azure Functions backend for ASP Call Up Form. Holds owner's refresh token + proxies all Microsoft Graph calls on behalf of authenticated users.",
+  "main": "src/{index.js,functions/*.js}",
+  "scripts": {
+    "start": "func start"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.5.0",
+    "@azure/data-tables": "^13.2.2",
+    "@azure/msal-node": "^2.13.0",
+    "jsonwebtoken": "^9.0.2",
+    "jwks-rsa": "^3.1.0"
+  }
+}
