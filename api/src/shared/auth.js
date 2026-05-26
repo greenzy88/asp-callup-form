@@ -50,17 +50,29 @@ function isAcceptableIssuer(iss, tenantId) {
   return guidV2.test(iss) || guidV1.test(iss);
 }
 
+function readHeader(req, name) {
+  if (!req || !req.headers) return "";
+  if (typeof req.headers.get === "function") {
+    return req.headers.get(name) || "";
+  }
+  return req.headers[name] ||
+         req.headers[name.toLowerCase()] ||
+         req.headers[name.toUpperCase()] ||
+         "";
+}
+
 async function requireUser(req) {
-  let raw = "";
-  if (req.headers && typeof req.headers.get === "function") {
-    raw = req.headers.get("authorization") || "";
-  } else if (req.headers) {
-    raw = req.headers.authorization || req.headers.Authorization || "";
-  }
-  if (!raw || !/^Bearer\s+/i.test(raw)) {
-    throw err(401, "Missing Authorization Bearer header");
-  }
+  // SWA's Managed Functions REWRITES the incoming Authorization header
+  // with an internal service-to-Functions token (audience looks like
+  // <funcappid>.azurewebsites.net/azurefunctions). Our user's MSAL ID
+  // token therefore arrives in a custom header that SWA forwards
+  // verbatim. Falls back to Authorization for local-dev parity.
+  let raw = readHeader(req, "x-user-token") || readHeader(req, "authorization");
+  if (!raw) throw err(401, "Missing X-User-Token header");
+  // The custom header carries the token raw (no Bearer prefix) but we
+  // also strip Bearer in case any caller adds it.
   const token = raw.replace(/^Bearer\s+/i, "").trim();
+  if (!token) throw err(401, "Empty token in X-User-Token");
 
   // Decode the token without verification so we can read the header
   // (whether a kid is present) and the claims (for the manual-checks

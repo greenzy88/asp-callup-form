@@ -354,9 +354,12 @@ function loginPopup() {
 // header automatically and surfaces non-2xx as thrown errors so callers
 // don't have to repeat the boilerplate.
 async function apiFetch(path, init) {
+  // 2026-05-25 — SWA's Managed Functions REPLACES Authorization with
+  // an internal service token before forwarding to /api/*. We send the
+  // MSAL ID token in a custom header that SWA forwards untouched.
   const opts = Object.assign({}, init || {});
   opts.headers = Object.assign({}, (init && init.headers) || {}, {
-    "Authorization": `Bearer ${idToken}`,
+    "X-User-Token": idToken,
   });
   const r = await fetch(`/api${path}`, opts);
   return r;
