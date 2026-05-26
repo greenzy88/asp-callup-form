@@ -807,8 +807,8 @@ async function downloadPDF(filename) {
     }
     const meta = await metaResp.json();
     const downloadUrl = meta["@microsoft.graph.downloadUrl"];
+    hideLoading();
     if (!downloadUrl) {
-      hideLoading();
       alert(
         "Graph API didn't return a download URL for this PDF.\n\n" +
         `Filename: ${filename}\n` +
@@ -817,36 +817,33 @@ async function downloadPDF(filename) {
       console.error("No @microsoft.graph.downloadUrl in metadata:", meta);
       return;
     }
-    // Step 2 — fetch the pre-signed URL WITHOUT auth header (the URL
-    // is already authenticated). This avoids the redirect-CORS issue.
-    const fileResp = await fetch(downloadUrl);
-    hideLoading();
-    if (!fileResp.ok) {
-      alert(
-        `Couldn't download the file content (HTTP ${fileResp.status}).\n\n` +
-        `Filename: ${filename}\nCheck console for details.`
-      );
-      console.error("PDF content fetch failed", fileResp.status);
-      return;
-    }
-    const blob = await fileResp.blob();
-    const blobUrl = window.URL.createObjectURL(blob);
+    // Step 2 — browser-mediated download. We do NOT fetch the
+    // pre-signed URL: it doesn't allow cross-origin fetch (no
+    // Access-Control-Allow-Origin for our SWA), even though it's
+    // perfectly valid for top-level browser navigation. Treat it like
+    // an email-style download link — let the browser handle it.
+    // Confirmed 2026-05-25: a fetch() against the downloadUrl raised
+    // TypeError("Failed to fetch") via the diagnostic in this same
+    // function. The anchor-click pattern below bypasses fetch.
     const a = document.createElement('a');
-    a.href = blobUrl; a.download = filename;
-    document.body.appendChild(a); a.click();
-    window.URL.revokeObjectURL(blobUrl);
+    a.href = downloadUrl;
+    a.download = filename;
+    a.rel = "noopener";
+    a.target = "_blank";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   } catch(e) {
     hideLoading();
     const msg = (e && e.message) || String(e);
     if (msg.includes("Failed to fetch")) {
       alert(
-        "Couldn't reach the download URL.\n\n" +
+        "Couldn't reach Microsoft Graph to fetch the file metadata.\n\n" +
         "Possible causes:\n" +
         "  • You're offline or behind a corporate firewall\n" +
-        "  • The pre-signed download URL expired (rare — usually valid 1h)\n" +
         "  • Your sign-in expired — refresh the page\n\n" +
         `Filename: ${filename}\n` +
-        "Check the browser console for the failing URL."
+        "Check the browser console for the failing request."
       );
     } else {
       alert("Error downloading PDF: " + msg);
