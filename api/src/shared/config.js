@@ -25,8 +25,14 @@ module.exports = {
     "AAD_REDIRECT_URI",
     "https://delightful-bay-0e217b31e.7.azurestaticapps.net/api/auth/callback"
   ),
-  // Storage table connection: SWA's managed API auto-provisions
-  // AzureWebJobsStorage; we reuse it for the token table.
-  storageConn: () => required("AzureWebJobsStorage"),
+  // Storage table connection. NOTE: SWA reserves names starting with
+  // AzureWebJobs*/WEBSITE_*/FUNCTIONS_* so we cannot use the default
+  // AzureWebJobsStorage as an app setting. Falls back to it if the
+  // runtime injects it, but the SWA setup uses STORAGE_CONNECTION.
+  storageConn: () => {
+    const v = process.env.STORAGE_CONNECTION || process.env.AzureWebJobsStorage;
+    if (!v || !v.trim()) throw new Error("Missing required app setting: STORAGE_CONNECTION");
+    return v.trim();
+  },
   tokenTableName: () => optional("TOKEN_TABLE_NAME", "OwnerTokens"),
 };
