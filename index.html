@@ -447,15 +447,20 @@ async function initSharedDrive() {
     if (!r.ok) {
       const bodyText = await r.text().catch(() => "");
       console.error("shares/driveItem failed:", r.status, bodyText);
-      let hint = "";
-      if (r.status === 403 || r.status === 401) {
-        hint = " Your account may not have been granted access to the share yet — David needs to add " +
-               currentUserUpn + " in OneDrive: right-click ASP-CallUp folder → Manage access → Grant access.";
-      } else if (r.status === 404) {
-        hint = " The sharing link in the app may have been revoked or rotated. Tell David.";
-      }
+      // Extract Graph error code + message so the banner shows the
+      // actual reason instead of a guess. Graph errors are JSON shaped
+      // { "error": { "code": "...", "message": "..." } }.
+      let gCode = "", gMsg = "";
+      try {
+        const j = JSON.parse(bodyText);
+        gCode = (j.error && j.error.code) || "";
+        gMsg = (j.error && j.error.message) || "";
+      } catch(_) {}
       showHealthBanner(
-        "Couldn't resolve the shared folder (HTTP " + r.status + ")." + hint
+        "Couldn't resolve the shared folder (HTTP " + r.status +
+        (gCode ? " " + gCode : "") + "). " +
+        (gMsg || bodyText.slice(0, 200) || "No error body returned.") +
+        " — Send this entire message to David."
       );
       return;
     }
