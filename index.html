@@ -115,6 +115,16 @@
   </div>
 </nav>
 
+<!-- 2026-05-25 HARDENING #1: persistent health banner. Shows when the
+     pre-flight read fails or any subsequent load errors. Hidden by
+     default; revealed by showHealthBanner() / hidden by hideHealthBanner(). -->
+<div id="healthBanner" style="display:none;background:#fff3cd;color:#664d03;border-bottom:3px solid #ffc107;padding:10px 16px;font-size:.9rem;">
+  <strong>&#9888; Data read failed:</strong>
+  <span id="healthBannerMsg"></span>
+  <button class="btn btn-sm btn-warning ms-2" onclick="recheckHealth()" style="font-size:.8rem;">Retry now</button>
+  <span class="text-muted ms-2 small">Saves are disabled until the read succeeds.</span>
+</div>
+
 <div class="container-fluid px-4 pb-5">
 
   <div id="authSection" class="alert alert-warning mb-4">
@@ -332,6 +342,17 @@ function loginPopup() {
     await initSharedDrive();
     await loadDataFromExcel();
     hideLoading();
+    // 2026-05-25 HARDENING #1: if a load fails later (token expires, network
+    // blip), the banner shows + saves disable. Every 5 min we silently retry
+    // the read; if it succeeds, banner clears and saves resume.
+    if (!window._healthRetryHandle) {
+      window._healthRetryHandle = setInterval(() => {
+        if (!lastLoadSucceeded && sharedFolderId) {
+          console.log("[health] periodic re-read attempt");
+          loadDataFromExcel();
+        }
+      }, 5 * 60 * 1000);
+    }
   }).catch(e => { alert("Login failed: " + e.message); });
 }
 
@@ -608,6 +629,118 @@ const HISTORY_HEADERS = [
   "OrderID","Status","ChangedBy","Timestamp","Notes"
 ];
 
+// 2026-05-25 PRODUCTION HARDENING (David: "going into production, cannot
+// afford breakages"). Three layers, all run automatically:
+//
+//   1. Pre-flight health check on page load — verifies the read path
+//      works before any save is allowed. Already covered by
+//      lastLoadSucceeded; this adds a periodic re-check and a more
+//      visible UI lock.
+//
+//   2. Auto-snapshot before destructive writes — copies the Orders +
+//      StatusHistory worksheets to timestamped backup worksheets
+//      before each writeWorksheet. If a bug ever clears the live
+//      sheet, the most recent snapshot is one PATCH away.
+//
+//   3. Anti-wipe sanity check — if the new row count for a write
+//      would shrink the sheet by >50% compared to the previously-
+//      loaded state, refuse the write and alert. Catches "in-memory
+//      cleared by a bug" before it lands on OneDrive.
+
+const BACKUP_KEEP_COUNT = 10;
+
+function snapshotName(prefix) {
+  const d = new Date();
+  const pad = n => String(n).padStart(2, "0");
+  return `${prefix}_${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+}
+
+// Copy a worksheet inside the same workbook. Idempotent on already-existing
+// destination (Graph appends a numeric suffix). Returns false on error
+// but never throws — backup is best-effort, must not block saves.
+async function snapshotWorksheet(itemId, srcName, destPrefix) {
+  try {
+    const url = `${workbookBase(itemId)}/worksheets('${encodeURIComponent(srcName)}')/copy`;
+    const r = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${accessToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ name: snapshotName(destPrefix) })
+    });
+    if (!r.ok) {
+      console.warn(`snapshotWorksheet(${srcName}) HTTP ${r.status} — non-fatal`);
+      return false;
+    }
+    return true;
+  } catch(e) {
+    console.warn(`snapshotWorksheet(${srcName}) error — non-fatal:`, e);
+    return false;
+  }
+}
+
+// Prune backup worksheets to keep only the most recent N per prefix.
+async function pruneBackups(itemId, prefix, keep = BACKUP_KEEP_COUNT) {
+  try {
+    const listUrl = `${workbookBase(itemId)}/worksheets`;
+    const r = await fetch(listUrl, {
+      headers: { "Authorization": `Bearer ${accessToken}` }
+    });
+    if (!r.ok) return;
+    const body = await r.json();
+    const matches = (body.value || [])
+      .filter(s => s.name && s.name.startsWith(prefix + "_"))
+      .sort((a, b) => a.name < b.name ? 1 : -1);  // newest first by name
+    const toDelete = matches.slice(keep);
+    for (const sheet of toDelete) {
+      await fetch(
+        `${workbookBase(itemId)}/worksheets('${encodeURIComponent(sheet.name)}')`,
+        {
+          method: "DELETE",
+          headers: { "Authorization": `Bearer ${accessToken}` }
+        }
+      ).catch(e => console.warn(`prune ${sheet.name} failed:`, e));
+    }
+  } catch(e) {
+    console.warn("pruneBackups error — non-fatal:", e);
+  }
+}
+
+// Health banner controls — UI surface for hardening #1.
+function showHealthBanner(msg) {
+  const banner = document.getElementById("healthBanner");
+  const msgEl = document.getElementById("healthBannerMsg");
+  if (banner && msgEl) { msgEl.textContent = msg; banner.style.display = "block"; }
+}
+function hideHealthBanner() {
+  const banner = document.getElementById("healthBanner");
+  if (banner) banner.style.display = "none";
+}
+async function recheckHealth() {
+  hideHealthBanner();
+  await loadDataFromExcel();
+}
+
+// Anti-wipe sanity check. Compares the proposed row count against the
+// current in-memory baseline. If shrunk by >50%, demand confirmation.
+// Returns true to proceed, false to abort.
+function antiWipeCheck(label, proposedRows, baselineRows, forceAllow) {
+  if (forceAllow) return true;
+  const p = proposedRows.length;
+  const b = baselineRows.length;
+  if (b === 0) return true;  // nothing to wipe, allow
+  if (p >= b * 0.5) return true;  // not a >50% shrink
+  const dropped = b - p;
+  const msg =
+    `ANTI-WIPE GUARD: saving ${label} would reduce row count from ${b} to ${p} ` +
+    `(${dropped} rows dropped, ${Math.round(dropped/b*100)}% of the sheet).\n\n` +
+    `This is a >50% shrink and is rarely intentional. If you really mean to ` +
+    `delete this many rows, click OK. Otherwise click Cancel — your OneDrive ` +
+    `data will be preserved.`;
+  return window.confirm(msg);
+}
+
 // Cached itemId of the data workbook — saves a metadata round-trip on
 // repeated load/save. Cleared on auth init.
 let excelItemId = null;
@@ -622,12 +755,9 @@ async function loadDataFromExcel() {
     } catch(fetchErr) {
       hideLoading();
       console.error("loadDataFromExcel resolve error:", fetchErr);
-      alert(
-        "Couldn't load orders from OneDrive.\n\n" +
-        fetchErr.message + "\n\n" +
-        "Your data on OneDrive is NOT lost — this is a read error. " +
-        "Refresh the page or contact David. " +
-        "Saves are disabled until the load succeeds."
+      showHealthBanner(
+        "Couldn't reach the workbook on OneDrive (" + fetchErr.message + "). " +
+        "Your data is NOT lost — this is a read error."
       );
       lastLoadSucceeded = false;
       return;
@@ -645,10 +775,9 @@ async function loadDataFromExcel() {
     } catch(wbErr) {
       hideLoading();
       console.error("loadDataFromExcel workbook error:", wbErr);
-      alert(
-        "Couldn't read the workbook sheets.\n\n" +
-        wbErr.message + "\n\n" +
-        "Your data on OneDrive is NOT lost. Refresh and try again."
+      showHealthBanner(
+        "Couldn't read the workbook sheets (" + wbErr.message + "). " +
+        "Your data is NOT lost — this is a read error."
       );
       lastLoadSucceeded = false;
       return;
@@ -665,6 +794,7 @@ async function loadDataFromExcel() {
     orders = rawOrders.filter(isReal);
     statusHistory = rawHistory.filter(isReal);
     lastLoadSucceeded = true;  // gate that allows writeExcelFile to proceed
+    hideHealthBanner();
     const purgedOrders = rawOrders.length - orders.length;
     const purgedHistory = rawHistory.length - statusHistory.length;
     renderTable();
@@ -680,7 +810,11 @@ async function loadDataFromExcel() {
         console.warn("Auto-cleanup failed (non-fatal):", cleanupErr);
       }
     }
-  } catch(e) { console.error("loadDataFromExcel error:", e); }
+  } catch(e) {
+    console.error("loadDataFromExcel error:", e);
+    showHealthBanner("Unexpected load error: " + (e.message || e));
+    lastLoadSucceeded = false;
+  }
   hideLoading();
 }
 
@@ -734,8 +868,21 @@ async function writeExcelFile(updatedOrders, newHistoryEntry, forceHistoryRewrit
     alert("Workbook item id not cached. Refresh and try again.");
     return;
   }
+  // 2026-05-25 HARDENING #3: anti-wipe sanity check. If the proposed
+  // Orders rows would shrink the sheet by >50%, demand confirmation
+  // before we touch OneDrive.
+  if (!antiWipeCheck("Orders", updatedOrders, orders, false)) {
+    console.warn("writeExcelFile aborted by anti-wipe guard");
+    return;
+  }
   try {
     showLoading("Saving...");
+    // 2026-05-25 HARDENING #2: auto-snapshot BEFORE destructive write.
+    // Best-effort — does not block the save if the snapshot fails.
+    await snapshotWorksheet(excelItemId, "Orders", "Orders_Backup");
+    if (newHistoryEntry || forceHistoryRewrite) {
+      await snapshotWorksheet(excelItemId, "StatusHistory", "History_Backup");
+    }
     // Workbook API per-sheet PATCH. No full-file download/upload —
     // CORS-clean for browser fetch.
     await writeWorksheet(excelItemId, "Orders", updatedOrders, ORDERS_HEADERS);
@@ -745,6 +892,9 @@ async function writeExcelFile(updatedOrders, newHistoryEntry, forceHistoryRewrit
     } else if (forceHistoryRewrite) {
       await writeWorksheet(excelItemId, "StatusHistory", statusHistory, HISTORY_HEADERS);
     }
+    // Best-effort prune of old backups — never blocks the save flow.
+    pruneBackups(excelItemId, "Orders_Backup").catch(() => {});
+    pruneBackups(excelItemId, "History_Backup").catch(() => {});
     await loadDataFromExcel();
   } catch(e) {
     console.error("writeExcelFile error:", e);
