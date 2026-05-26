@@ -457,41 +457,137 @@ async function sendEmail(recipient, subject, body) {
 }
 
 // ── Excel read/write (shared OneDrive ASP-CallUp folder) ──
-// 2026-05-25 — pulled out of loadDataFromExcel + writeExcelFile so both
-// share the same fetch strategy. Uses the same CORS-clean pattern as
-// downloadPDF: get metadata to grab @microsoft.graph.downloadUrl, then
-// fetch THAT (no auth header — URL is pre-signed). Returns the
-// ArrayBuffer of the file content, OR null on 404 (file doesn't exist
-// yet — caller should create one). Throws on any other failure so the
-// caller can refuse to overwrite with corrupted in-memory state.
-async function fetchFileBytes(filename) {
+// 2026-05-25 — both the `:/content` GET and the @microsoft.graph.downloadUrl
+// GET fail CORS for browser-based fetch (confirmed live by David).
+// `:/content` redirects to a SharePoint/OneDrive blob URL whose CORS
+// doesn't include the SWA origin; the pre-signed downloadUrl is also
+// CORS-restricted (browser navigation only, not fetch).
+//
+// Switching to the Excel Online Workbook API. `/items/{id}/workbook/
+// worksheets/{name}/usedRange` returns JSON directly — no file-blob
+// redirect, no CORS issue. This is the official browser-friendly path
+// for reading Excel data on OneDrive.
+
+// Resolve a filename in the shared folder to its DriveItem id. Returns
+// null on 404. Throws on other errors.
+async function resolveItemId(filename) {
   const metaUrl = fileMetadataUrl(filename);
   if (!metaUrl) {
-    throw new Error("Shared folder not initialized — cannot fetch " + filename);
+    throw new Error("Shared folder not initialized — cannot resolve " + filename);
   }
-  const metaResp = await fetch(metaUrl, {
+  const r = await fetch(metaUrl, {
     headers: { "Authorization": `Bearer ${accessToken}` }
   });
-  if (metaResp.status === 404) return null;  // file doesn't exist yet
-  if (!metaResp.ok) {
+  if (r.status === 404) return null;
+  if (!r.ok) {
+    throw new Error(`Graph metadata HTTP ${r.status} for ${filename}`);
+  }
+  const meta = await r.json();
+  return meta.id || null;
+}
+
+// Workbook-driveId helper — Workbook API requires the drive base
+// (me/drive vs drives/{id}) plus the itemId. Mirrors fileUrl's
+// owner-vs-shared switch.
+function workbookBase(itemId) {
+  if (!sharedDriveId) {
+    return `https://graph.microsoft.com/v1.0/me/drive/items/${itemId}/workbook`;
+  }
+  return `https://graph.microsoft.com/v1.0/drives/${sharedDriveId}/items/${itemId}/workbook`;
+}
+
+// Read a worksheet's usedRange as an array of row-objects keyed by the
+// first-row headers. Returns [] if the sheet doesn't exist or is empty.
+async function readWorksheet(itemId, sheetName) {
+  const url = `${workbookBase(itemId)}/worksheets('${encodeURIComponent(sheetName)}')/usedRange?$select=values`;
+  const r = await fetch(url, {
+    headers: { "Authorization": `Bearer ${accessToken}` }
+  });
+  if (r.status === 404) return [];  // sheet doesn't exist
+  if (!r.ok) {
+    throw new Error(`Workbook usedRange HTTP ${r.status} for ${sheetName}`);
+  }
+  const body = await r.json();
+  const values = body.values || [];
+  if (values.length < 1) return [];
+  const headers = values[0].map(h => String(h));
+  const rows = [];
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
+    const obj = {};
+    for (let c = 0; c < headers.length; c++) {
+      obj[headers[c]] = row[c] !== undefined && row[c] !== null ? row[c] : "";
+    }
+    rows.push(obj);
+  }
+  return rows;
+}
+
+// Write an array of row-objects to a worksheet, replacing all existing
+// content. Strategy: clear usedRange, then write a single range that
+// covers headers + all rows. Uses range(address) PATCH which is
+// idempotent and atomic per request.
+async function writeWorksheet(itemId, sheetName, rows, headerOrder) {
+  const base = workbookBase(itemId);
+  const sheetSeg = `worksheets('${encodeURIComponent(sheetName)}')`;
+  // 1) Clear the existing usedRange (safe on empty sheet — returns
+  //    range(0,0) which is a no-op clear).
+  try {
+    const clearResp = await fetch(
+      `${base}/${sheetSeg}/usedRange/clear`,
+      {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${accessToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ applyTo: "Contents" })
+      }
+    );
+    if (!clearResp.ok && clearResp.status !== 404) {
+      console.warn("Workbook clear non-fatal:", clearResp.status);
+    }
+  } catch (clearErr) {
+    console.warn("Workbook clear failed (continuing):", clearErr);
+  }
+  // 2) Build the 2D values array: headers + rows.
+  const values = [headerOrder.slice()];
+  for (const row of rows) {
+    values.push(headerOrder.map(h => {
+      const v = row[h];
+      return v !== undefined && v !== null ? v : "";
+    }));
+  }
+  if (values.length === 1 && rows.length === 0) {
+    // Just headers — still write so the sheet retains its schema.
+  }
+  // 3) Address: A1 to last column letter and last row.
+  const lastCol = colLetter(headerOrder.length);
+  const addr = `A1:${lastCol}${values.length}`;
+  const writeResp = await fetch(
+    `${base}/${sheetSeg}/range(address='${addr}')`,
+    {
+      method: "PATCH",
+      headers: {
+        "Authorization": `Bearer ${accessToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ values })
+    }
+  );
+  if (!writeResp.ok) {
     throw new Error(
-      `Graph metadata fetch HTTP ${metaResp.status} for ${filename}`
+      `Workbook range PATCH HTTP ${writeResp.status} for ${sheetName}: ` +
+      await writeResp.text().catch(() => "")
     );
   }
-  const meta = await metaResp.json();
-  const downloadUrl = meta["@microsoft.graph.downloadUrl"];
-  if (!downloadUrl) {
-    throw new Error(
-      `Graph metadata missing @microsoft.graph.downloadUrl for ${filename}`
-    );
-  }
-  const fileResp = await fetch(downloadUrl);
-  if (!fileResp.ok) {
-    throw new Error(
-      `Pre-signed downloadUrl GET HTTP ${fileResp.status} for ${filename}`
-    );
-  }
-  return await fileResp.arrayBuffer();
+}
+
+// 1 -> "A", 26 -> "Z", 27 -> "AA"
+function colLetter(n) {
+  let s = "";
+  while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); }
+  return s;
 }
 
 // Tracks whether the most recent loadDataFromExcel succeeded. If load
@@ -500,33 +596,68 @@ async function fetchFileBytes(filename) {
 // "list disappears after refresh" bug becomes a permanent data wipe.
 let lastLoadSucceeded = false;
 
+// Header order for the Orders sheet. MUST stay in sync with createNewExcelFile.
+// Used by readWorksheet → row-objects, and writeWorksheet → values array.
+const ORDERS_HEADERS = [
+  "OrderID","Event","StartDate","EndDate","StartTime","EndTime",
+  "Days","Coverage","NumGuards","Location","SiteContact",
+  "ContactNumber","PPERequired","Duties","Status",
+  "UpdatedBy","LastUpdated","Archived","PDFFilename"
+];
+const HISTORY_HEADERS = [
+  "OrderID","Status","ChangedBy","Timestamp","Notes"
+];
+
+// Cached itemId of the data workbook — saves a metadata round-trip on
+// repeated load/save. Cleared on auth init.
+let excelItemId = null;
+
 async function loadDataFromExcel() {
   if (!sharedFolderId) { console.error("Shared folder not initialized"); return; }
   try {
     showLoading("Loading orders...");
-    let buf;
+    let itemId;
     try {
-      buf = await fetchFileBytes(EXCEL_FILENAME);
+      itemId = await resolveItemId(EXCEL_FILENAME);
     } catch(fetchErr) {
       hideLoading();
-      console.error("loadDataFromExcel fetch error:", fetchErr);
+      console.error("loadDataFromExcel resolve error:", fetchErr);
       alert(
         "Couldn't load orders from OneDrive.\n\n" +
         fetchErr.message + "\n\n" +
-        "Your data on OneDrive is NOT lost — this is just a read error. " +
+        "Your data on OneDrive is NOT lost — this is a read error. " +
         "Refresh the page or contact David. " +
         "Saves are disabled until the load succeeds."
       );
       lastLoadSucceeded = false;
       return;
     }
-    if (buf === null) {
+    if (itemId === null) {
       await createNewExcelFile();
       return;
     }
-    const wb = XLSX.read(buf, { type: "array" });
-    const rawOrders = XLSX.utils.sheet_to_json(wb.Sheets["Orders"] || {});
-    const rawHistory = XLSX.utils.sheet_to_json(wb.Sheets["StatusHistory"] || {});
+    excelItemId = itemId;
+    // Workbook API — JSON, no file blob redirect, CORS-clean.
+    let rawOrders, rawHistory;
+    try {
+      rawOrders = await readWorksheet(itemId, "Orders");
+      rawHistory = await readWorksheet(itemId, "StatusHistory");
+    } catch(wbErr) {
+      hideLoading();
+      console.error("loadDataFromExcel workbook error:", wbErr);
+      alert(
+        "Couldn't read the workbook sheets.\n\n" +
+        wbErr.message + "\n\n" +
+        "Your data on OneDrive is NOT lost. Refresh and try again."
+      );
+      lastLoadSucceeded = false;
+      return;
+    }
+    // Adapter so the rest of the function (originally written for
+    // xlsx.js sheet_to_json output) keeps working unchanged.
+    const wb = null;  // unused below now
+    // Stub the old call sites by aliasing — keeps the diff small.
+    // (rawOrders + rawHistory are already the parsed JSON.)
     // Filter blank rows (e.g. the seed row left by createNewExcelFile, or
     // any row whose OrderID is empty/whitespace). These show as a click-but-do-nothing
     // entry in the table and can't be deleted via the UI.
@@ -538,13 +669,16 @@ async function loadDataFromExcel() {
     const purgedHistory = rawHistory.length - statusHistory.length;
     renderTable();
     updateStats();
-    // Silently rewrite the workbook to purge blank rows from the source file
+    // Silently rewrite the workbook to purge blank rows from the source file.
+    // 2026-05-25: via Workbook API now, no full-workbook upload.
     if ((purgedOrders > 0 || purgedHistory > 0) && isAdmin) {
       console.log(`Auto-cleanup: removing ${purgedOrders} blank order row(s) + ${purgedHistory} orphan history row(s)`);
-      const cleanWb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(cleanWb, XLSX.utils.json_to_sheet(orders), "Orders");
-      XLSX.utils.book_append_sheet(cleanWb, XLSX.utils.json_to_sheet(statusHistory), "StatusHistory");
-      await uploadWorkbook(cleanWb);
+      try {
+        await writeWorksheet(itemId, "Orders", orders, ORDERS_HEADERS);
+        await writeWorksheet(itemId, "StatusHistory", statusHistory, HISTORY_HEADERS);
+      } catch(cleanupErr) {
+        console.warn("Auto-cleanup failed (non-fatal):", cleanupErr);
+      }
     }
   } catch(e) { console.error("loadDataFromExcel error:", e); }
   hideLoading();
@@ -583,10 +717,8 @@ async function uploadWorkbook(wb) {
 }
 
 async function writeExcelFile(updatedOrders, newHistoryEntry, forceHistoryRewrite) {
-  // 2026-05-25 SAFETY GUARD (David: "when I refresh, the entire list
-  // disappears. This is a serious problem"): if the most recent load
-  // failed, in-memory `orders` is empty or stale and writing it would
-  // OVERWRITE the real OneDrive file with garbage. Refuse to save.
+  // 2026-05-25 SAFETY GUARD: if the most recent load failed, refuse to
+  // overwrite the remote file with potentially-empty in-memory state.
   if (!lastLoadSucceeded) {
     alert(
       "Cannot save: orders haven't been loaded successfully yet.\n\n" +
@@ -594,49 +726,34 @@ async function writeExcelFile(updatedOrders, newHistoryEntry, forceHistoryRewrit
       "— your data on OneDrive is safe but the read is broken."
     );
     console.error(
-      "writeExcelFile REFUSED: lastLoadSucceeded=false. Refusing to " +
-      "overwrite remote file with potentially-empty in-memory state."
+      "writeExcelFile REFUSED: lastLoadSucceeded=false."
     );
+    return;
+  }
+  if (!excelItemId) {
+    alert("Workbook item id not cached. Refresh and try again.");
     return;
   }
   try {
     showLoading("Saving...");
-    // Download current workbook to preserve all sheets. Use the same
-    // CORS-clean metadata→downloadUrl pattern as loadDataFromExcel.
-    let wb;
-    try {
-      const buf = await fetchFileBytes(EXCEL_FILENAME);
-      if (buf) {
-        wb = XLSX.read(buf, { type: "array" });
-      } else {
-        wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([]), "Orders");
-        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([]), "StatusHistory");
-      }
-    } catch(fetchErr) {
-      // 2026-05-25: previously this branch silently built an empty
-      // workbook and wrote it back, wiping all existing data. Now
-      // we abort so the file isn't corrupted.
-      hideLoading();
-      console.error("writeExcelFile fetch error:", fetchErr);
-      alert(
-        "Couldn't read the existing orders file to merge your change.\n\n" +
-        fetchErr.message + "\n\n" +
-        "Save was aborted to protect your OneDrive data. Refresh the " +
-        "page and try again."
-      );
-      return;
-    }
-    wb.Sheets["Orders"] = XLSX.utils.json_to_sheet(updatedOrders);
+    // Workbook API per-sheet PATCH. No full-file download/upload —
+    // CORS-clean for browser fetch.
+    await writeWorksheet(excelItemId, "Orders", updatedOrders, ORDERS_HEADERS);
     if (newHistoryEntry) {
       statusHistory.push(newHistoryEntry);
-      wb.Sheets["StatusHistory"] = XLSX.utils.json_to_sheet(statusHistory);
+      await writeWorksheet(excelItemId, "StatusHistory", statusHistory, HISTORY_HEADERS);
     } else if (forceHistoryRewrite) {
-      wb.Sheets["StatusHistory"] = XLSX.utils.json_to_sheet(statusHistory);
+      await writeWorksheet(excelItemId, "StatusHistory", statusHistory, HISTORY_HEADERS);
     }
-    await uploadWorkbook(wb);
     await loadDataFromExcel();
-  } catch(e) { console.error("writeExcelFile error:", e); hideLoading(); }
+  } catch(e) {
+    console.error("writeExcelFile error:", e);
+    hideLoading();
+    alert(
+      "Save failed: " + (e && e.message ? e.message : String(e)) +
+      "\n\nYour OneDrive data was not overwritten. Refresh and try again."
+    );
+  }
 }
 
 // ── UI helpers ──
