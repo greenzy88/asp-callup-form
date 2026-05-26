@@ -16,8 +16,7 @@
           integrity="sha384-/1qUCSGwTur9vjf/z9lmu/eCUYbpOTgSjmpbMQZ1/CtX2v/WcAIKqRv+U1DUCG6e" crossorigin="anonymous"></script>
   <script src="https://alcdn.msauth.net/browser/2.30.0/js/msal-browser.min.js"
           integrity="sha384-HC34/sGr6mESU7p33Bo1s3lWvYOdfDnu05vmaJFpSvHZbTUdKWIOxIn5SuZnqafp" crossorigin="anonymous"></script>
-  <script src="https://cdn.sheetjs.com/xlsx-0.18.5/package/dist/xlsx.full.min.js"
-          integrity="sha384-vtjasyidUo0kW94K5MXDXntzOJpQgBKXmE7e2Ga4LG0skTTLeBi97eFAXsqewJjw" crossorigin="anonymous"></script>
+  <!-- xlsx.full.min.js removed 2026-05-25 (backend owns workbook IO now) -->
   <style>
     :root{--asp-blue:#003366;--asp-gold:#C8A951;}
     body{background:#f4f6f9;font-family:'Segoe UI',sans-serif;}
@@ -224,32 +223,18 @@
 </div>
 
 <script>
-const EXCEL_FILENAME = "CallUpForm_Data.xlsx";
-const FOLDER_NAME    = "ASP-CallUp";
+// 2026-05-25 — frontend constants. OneDrive plumbing constants
+// (EXCEL_FILENAME, FOLDER_NAME, FOLDER_SHARE_URL, SHARE_WITH) deleted
+// when the backend took over Graph IO. Role lists are kept here purely
+// for frontend UI gating; the backend enforces real auth via roles.js.
 const OWNER_UPN      = "dramlagan@security-asp.com";
-
-// 2026-05-25 — non-owner discovery uses /shares/{encoded}/driveItem.
-// This URL is David's "People in Security ASP Inc with the link can
-// edit" sharing link for the ASP-CallUp folder. Hitting Graph /shares/
-// with a base64url-encoded copy of this URL resolves to the folder
-// using the calling user's existing OneDrive share grant — no
-// Files.ReadWrite.All needed, no admin consent needed.
-const FOLDER_SHARE_URL = "https://aspsecurityinc-my.sharepoint.com/:f:/g/personal/dramlagan_security-asp_com/IgCPEwh_EKHPTLgz_wlTzmdeAUJZzshGsT7OYItYNj1PQ2I?e=QJNUEi";
-
-// Service providers with manager (edit) access — same permissions as Farhad
 const MANAGER_UPNS = [
   "fmohammad@security-asp.com",
   "pdeal@security-asp.com"
 ];
-// Read-only BBTCA contacts
 const CLIENT_UPNS = [
   "atraining@security-asp.com"
 ];
-// Folder share list — anyone who needs to see/use the shared OneDrive folder
-const SHARE_WITH = [...MANAGER_UPNS, ...CLIENT_UPNS];
-
-// Email notification recipients — who gets pinged on new orders / status changes.
-// Currently David only; expand later when the team wants in.
 const NOTIFY_RECIPIENTS = ["dramlagan@security-asp.com"];
 
 // Display names used in the user badge + Status History "ChangedBy"
@@ -303,16 +288,15 @@ const msalConfig = {
   cache: { cacheLocation: "localStorage", storeAuthStateInCookie: false }
 };
 
-// 2026-05-25 — back to the narrow scope. Files.ReadWrite.All triggers
-// admin-consent in this tenant and David is not IT, so we can't get it
-// approved. Non-owner discovery now uses /shares/{encoded}/driveItem
-// (see FOLDER_SHARE_URL below + initSharedDrive non-owner branch),
-// which works with just Files.ReadWrite + the existing OneDrive
-// invite already issued to each user.
-const loginRequest = { scopes: ["Files.ReadWrite", "Mail.Send"] };
+// 2026-05-25 — frontend now talks to /api/* (Azure Function backend)
+// instead of Microsoft Graph directly. MSAL is used only to obtain
+// an ID token; the backend validates the ID token (audience=clientId)
+// and does all Graph work as the OWNER via a stored refresh token.
+// No per-user Graph scopes; openid+profile+email are auto-granted.
+const loginRequest = { scopes: ["openid", "profile", "email"] };
 
-let msalInstance, accessToken = null;
-let sharedDriveId = null, sharedFolderId = null, currentUserUpn = "";
+let msalInstance, idToken = null;
+let currentUserUpn = "";
 let orders = [], statusHistory = [], selectedId = null, isManager = false, isAdmin = false;
 let isEditingFields = false;
 
@@ -346,28 +330,49 @@ function loginPopup() {
   if (!msalInstance) { alert("MSAL not ready"); return; }
   msalInstance.loginPopup(loginRequest).then(async response => {
     msalInstance.setActiveAccount(response.account);
-    accessToken = response.accessToken;
+    idToken = response.idToken;
     currentUserUpn = response.account.username || "";
     document.getElementById("authSection").style.display = "none";
     document.getElementById("appContent").style.display = "block";
     document.getElementById("signOutBtn").style.display = "block";
     detectUserRole(currentUserUpn);
-    showLoading("Connecting to shared drive...");
-    await initSharedDrive();
+    showLoading("Loading orders...");
     await loadDataFromExcel();
     hideLoading();
-    // 2026-05-25 HARDENING #1: if a load fails later (token expires, network
-    // blip), the banner shows + saves disable. Every 5 min we silently retry
-    // the read; if it succeeds, banner clears and saves resume.
     if (!window._healthRetryHandle) {
       window._healthRetryHandle = setInterval(() => {
-        if (!lastLoadSucceeded && sharedFolderId) {
+        if (!lastLoadSucceeded) {
           console.log("[health] periodic re-read attempt");
           loadDataFromExcel();
         }
       }, 5 * 60 * 1000);
     }
   }).catch(e => { alert("Login failed: " + e.message); });
+}
+
+// All function backend calls go through this helper. Adds Authorization
+// header automatically and surfaces non-2xx as thrown errors so callers
+// don't have to repeat the boilerplate.
+async function apiFetch(path, init) {
+  const opts = Object.assign({}, init || {});
+  opts.headers = Object.assign({}, (init && init.headers) || {}, {
+    "Authorization": `Bearer ${idToken}`,
+  });
+  const r = await fetch(`/api${path}`, opts);
+  return r;
+}
+async function apiJson(path, init) {
+  const r = await apiFetch(path, init);
+  const txt = await r.text();
+  let body;
+  try { body = txt ? JSON.parse(txt) : {}; } catch (_) { body = { raw: txt }; }
+  if (!r.ok) {
+    const err = new Error((body && body.error) || `HTTP ${r.status}`);
+    err.status = r.status;
+    err.body = body;
+    throw err;
+  }
+  return body;
 }
 
 function signOut() {
@@ -391,368 +396,7 @@ function detectUserRole(username) {
   if (statusForm) statusForm.style.display = isManager ? "block" : "none";
 }
 
-// ── Shared OneDrive folder: owner creates/shares; others discover via sharedWithMe ──
-async function initSharedDrive() {
-  const isOwner = currentUserUpn.toLowerCase() === OWNER_UPN.toLowerCase();
-
-  if (isOwner) {
-    // Find or create the ASP-CallUp folder in owner's OneDrive
-    let r = await fetch(
-      `https://graph.microsoft.com/v1.0/me/drive/root:/${encodeURIComponent(FOLDER_NAME)}`,
-      { headers: { "Authorization": `Bearer ${accessToken}` } }
-    );
-    let folderId;
-    if (r.status === 404) {
-      const cr = await fetch(
-        "https://graph.microsoft.com/v1.0/me/drive/root/children",
-        {
-          method: "POST",
-          headers: { "Authorization": `Bearer ${accessToken}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ name: FOLDER_NAME, folder: {}, "@microsoft.graph.conflictBehavior": "rename" })
-        }
-      );
-      folderId = (await cr.json()).id;
-    } else if (r.ok) {
-      folderId = (await r.json()).id;
-    } else {
-      console.error("Failed to find/create shared folder:", r.status); return;
-    }
-    sharedFolderId = folderId;
-    sharedDriveId  = null; // null = use me/drive
-
-    // Auto-share with each recipient (silently, no invitation email)
-    for (const email of SHARE_WITH) {
-      await fetch(
-        `https://graph.microsoft.com/v1.0/me/drive/items/${folderId}/invite`,
-        {
-          method: "POST",
-          headers: { "Authorization": `Bearer ${accessToken}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ requireSignIn: true, sendInvitation: false, roles: ["write"],
-            recipients: [{ email }] })
-        }
-      ).catch(e => console.warn("Share invite error (may already be shared):", e));
-    }
-    console.log("Drive: owner mode, folder =", folderId);
-
-  } else {
-    // Non-owner: resolve the shared folder via /shares/{encoded}/driveItem.
-    // This endpoint works with Files.ReadWrite (no .All) as long as the
-    // calling user has been granted access to the share (which David did
-    // via OneDrive's Share UI). Avoids the sharedWithMe-needs-.All trap.
-    const encoded = encodeShareUrl(FOLDER_SHARE_URL);
-    const r = await fetch(
-      `https://graph.microsoft.com/v1.0/shares/${encoded}/driveItem`,
-      { headers: { "Authorization": `Bearer ${accessToken}` } }
-    );
-    if (!r.ok) {
-      const bodyText = await r.text().catch(() => "");
-      console.error("shares/driveItem failed:", r.status, bodyText);
-      // Extract Graph error code + message so the banner shows the
-      // actual reason instead of a guess. Graph errors are JSON shaped
-      // { "error": { "code": "...", "message": "..." } }.
-      let gCode = "", gMsg = "";
-      try {
-        const j = JSON.parse(bodyText);
-        gCode = (j.error && j.error.code) || "";
-        gMsg = (j.error && j.error.message) || "";
-      } catch(_) {}
-      showHealthBanner(
-        "Couldn't resolve the shared folder (HTTP " + r.status +
-        (gCode ? " " + gCode : "") + "). " +
-        (gMsg || bodyText.slice(0, 200) || "No error body returned.") +
-        " — Send this entire message to David."
-      );
-      return;
-    }
-    const meta = await r.json();
-    sharedDriveId  = meta.parentReference && meta.parentReference.driveId
-                      ? meta.parentReference.driveId : null;
-    sharedFolderId = meta.id || null;
-    if (!sharedDriveId || !sharedFolderId) {
-      console.error("shares/driveItem returned incomplete metadata:", meta);
-      showHealthBanner("The shared folder response was missing driveId/id. Contact David.");
-      return;
-    }
-    console.log("Drive: non-owner mode via /shares/, remote drive =", sharedDriveId);
-  }
-}
-
-// Base64url-encode a sharing URL for Graph's /shares/{id} endpoint.
-// Per MS docs: base64-encode, replace +/ with -_, strip trailing =,
-// prepend "u!".
-function encodeShareUrl(url) {
-  const b64 = btoa(url);
-  return "u!" + b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-function fileUrl(filename) {
-  if (!sharedFolderId) return null;
-  const enc = encodeURIComponent(filename);
-  if (!sharedDriveId) {
-    return `https://graph.microsoft.com/v1.0/me/drive/items/${sharedFolderId}:/${enc}:/content`;
-  }
-  return `https://graph.microsoft.com/v1.0/drives/${sharedDriveId}/items/${sharedFolderId}:/${enc}:/content`;
-}
-
-// 2026-05-25 — metadata URL (no :/content suffix). Returns JSON with
-// @microsoft.graph.downloadUrl, a pre-signed URL the browser can fetch
-// without CORS issues. Avoids the 302-redirect-to-SharePoint problem
-// that breaks GET :/content from browser fetch (David: uploads work,
-// downloads fail with "Failed to fetch" — confirmed not a null-URL
-// nor token issue since PUT to the SAME endpoint works).
-function fileMetadataUrl(filename) {
-  if (!sharedFolderId) return null;
-  const enc = encodeURIComponent(filename);
-  if (!sharedDriveId) {
-    return `https://graph.microsoft.com/v1.0/me/drive/items/${sharedFolderId}:/${enc}`;
-  }
-  return `https://graph.microsoft.com/v1.0/drives/${sharedDriveId}/items/${sharedFolderId}:/${enc}`;
-}
-
-// ── Email ──
-async function sendEmail(recipient, subject, body) {
-  try {
-    const r = await fetch("https://graph.microsoft.com/v1.0/me/sendMail", {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${accessToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ message: { subject, body: { contentType: "HTML", content: body },
-        toRecipients: [{ emailAddress: { address: recipient } }] } })
-    });
-    if (!r.ok) console.error("Email failed:", r.status);
-  } catch(e) { console.error("sendEmail error:", e); }
-}
-
-// ── Excel read/write (shared OneDrive ASP-CallUp folder) ──
-// 2026-05-25 — both the `:/content` GET and the @microsoft.graph.downloadUrl
-// GET fail CORS for browser-based fetch (confirmed live by David).
-// `:/content` redirects to a SharePoint/OneDrive blob URL whose CORS
-// doesn't include the SWA origin; the pre-signed downloadUrl is also
-// CORS-restricted (browser navigation only, not fetch).
-//
-// Switching to the Excel Online Workbook API. `/items/{id}/workbook/
-// worksheets/{name}/usedRange` returns JSON directly — no file-blob
-// redirect, no CORS issue. This is the official browser-friendly path
-// for reading Excel data on OneDrive.
-
-// Resolve a filename in the shared folder to its DriveItem id. Returns
-// null on 404. Throws on other errors.
-async function resolveItemId(filename) {
-  const metaUrl = fileMetadataUrl(filename);
-  if (!metaUrl) {
-    throw new Error("Shared folder not initialized — cannot resolve " + filename);
-  }
-  const r = await fetch(metaUrl, {
-    headers: { "Authorization": `Bearer ${accessToken}` }
-  });
-  if (r.status === 404) return null;
-  if (!r.ok) {
-    throw new Error(`Graph metadata HTTP ${r.status} for ${filename}`);
-  }
-  const meta = await r.json();
-  return meta.id || null;
-}
-
-// Workbook-driveId helper — Workbook API requires the drive base
-// (me/drive vs drives/{id}) plus the itemId. Mirrors fileUrl's
-// owner-vs-shared switch.
-function workbookBase(itemId) {
-  if (!sharedDriveId) {
-    return `https://graph.microsoft.com/v1.0/me/drive/items/${itemId}/workbook`;
-  }
-  return `https://graph.microsoft.com/v1.0/drives/${sharedDriveId}/items/${itemId}/workbook`;
-}
-
-// Read a worksheet's usedRange as an array of row-objects keyed by the
-// first-row headers. Returns [] if the sheet doesn't exist or is empty.
-async function readWorksheet(itemId, sheetName) {
-  const url = `${workbookBase(itemId)}/worksheets('${encodeURIComponent(sheetName)}')/usedRange?$select=values`;
-  const r = await fetch(url, {
-    headers: { "Authorization": `Bearer ${accessToken}` }
-  });
-  if (r.status === 404) return [];  // sheet doesn't exist
-  if (!r.ok) {
-    throw new Error(`Workbook usedRange HTTP ${r.status} for ${sheetName}`);
-  }
-  const body = await r.json();
-  const values = body.values || [];
-  if (values.length < 1) return [];
-  const headers = values[0].map(h => String(h));
-  const rows = [];
-  for (let i = 1; i < values.length; i++) {
-    const row = values[i];
-    const obj = {};
-    for (let c = 0; c < headers.length; c++) {
-      obj[headers[c]] = row[c] !== undefined && row[c] !== null ? row[c] : "";
-    }
-    rows.push(obj);
-  }
-  return rows;
-}
-
-// Write an array of row-objects to a worksheet, replacing all existing
-// content. Strategy: clear usedRange, then write a single range that
-// covers headers + all rows. Uses range(address) PATCH which is
-// idempotent and atomic per request.
-async function writeWorksheet(itemId, sheetName, rows, headerOrder) {
-  const base = workbookBase(itemId);
-  const sheetSeg = `worksheets('${encodeURIComponent(sheetName)}')`;
-  // 1) Clear the existing usedRange (safe on empty sheet — returns
-  //    range(0,0) which is a no-op clear).
-  try {
-    const clearResp = await fetch(
-      `${base}/${sheetSeg}/usedRange/clear`,
-      {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${accessToken}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ applyTo: "Contents" })
-      }
-    );
-    if (!clearResp.ok && clearResp.status !== 404) {
-      console.warn("Workbook clear non-fatal:", clearResp.status);
-    }
-  } catch (clearErr) {
-    console.warn("Workbook clear failed (continuing):", clearErr);
-  }
-  // 2) Build the 2D values array: headers + rows.
-  const values = [headerOrder.slice()];
-  for (const row of rows) {
-    values.push(headerOrder.map(h => {
-      const v = row[h];
-      return v !== undefined && v !== null ? v : "";
-    }));
-  }
-  if (values.length === 1 && rows.length === 0) {
-    // Just headers — still write so the sheet retains its schema.
-  }
-  // 3) Address: A1 to last column letter and last row.
-  const lastCol = colLetter(headerOrder.length);
-  const addr = `A1:${lastCol}${values.length}`;
-  const writeResp = await fetch(
-    `${base}/${sheetSeg}/range(address='${addr}')`,
-    {
-      method: "PATCH",
-      headers: {
-        "Authorization": `Bearer ${accessToken}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ values })
-    }
-  );
-  if (!writeResp.ok) {
-    throw new Error(
-      `Workbook range PATCH HTTP ${writeResp.status} for ${sheetName}: ` +
-      await writeResp.text().catch(() => "")
-    );
-  }
-}
-
-// 1 -> "A", 26 -> "Z", 27 -> "AA"
-function colLetter(n) {
-  let s = "";
-  while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); }
-  return s;
-}
-
-// Tracks whether the most recent loadDataFromExcel succeeded. If load
-// failed (CORS, network, parse), writeExcelFile MUST NOT overwrite the
-// remote file with potentially-empty in-memory data — that's how the
-// "list disappears after refresh" bug becomes a permanent data wipe.
-let lastLoadSucceeded = false;
-
-// Header order for the Orders sheet. MUST stay in sync with createNewExcelFile.
-// Used by readWorksheet → row-objects, and writeWorksheet → values array.
-const ORDERS_HEADERS = [
-  "OrderID","Event","StartDate","EndDate","StartTime","EndTime",
-  "Days","Coverage","NumGuards","Location","SiteContact",
-  "ContactNumber","PPERequired","Duties","Status",
-  "UpdatedBy","LastUpdated","Archived","PDFFilename"
-];
-const HISTORY_HEADERS = [
-  "OrderID","Status","ChangedBy","Timestamp","Notes"
-];
-
-// 2026-05-25 PRODUCTION HARDENING (David: "going into production, cannot
-// afford breakages"). Three layers, all run automatically:
-//
-//   1. Pre-flight health check on page load — verifies the read path
-//      works before any save is allowed. Already covered by
-//      lastLoadSucceeded; this adds a periodic re-check and a more
-//      visible UI lock.
-//
-//   2. Auto-snapshot before destructive writes — copies the Orders +
-//      StatusHistory worksheets to timestamped backup worksheets
-//      before each writeWorksheet. If a bug ever clears the live
-//      sheet, the most recent snapshot is one PATCH away.
-//
-//   3. Anti-wipe sanity check — if the new row count for a write
-//      would shrink the sheet by >50% compared to the previously-
-//      loaded state, refuse the write and alert. Catches "in-memory
-//      cleared by a bug" before it lands on OneDrive.
-
-const BACKUP_KEEP_COUNT = 10;
-
-function snapshotName(prefix) {
-  const d = new Date();
-  const pad = n => String(n).padStart(2, "0");
-  return `${prefix}_${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-}
-
-// Copy a worksheet inside the same workbook. Idempotent on already-existing
-// destination (Graph appends a numeric suffix). Returns false on error
-// but never throws — backup is best-effort, must not block saves.
-async function snapshotWorksheet(itemId, srcName, destPrefix) {
-  try {
-    const url = `${workbookBase(itemId)}/worksheets('${encodeURIComponent(srcName)}')/copy`;
-    const r = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${accessToken}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ name: snapshotName(destPrefix) })
-    });
-    if (!r.ok) {
-      console.warn(`snapshotWorksheet(${srcName}) HTTP ${r.status} — non-fatal`);
-      return false;
-    }
-    return true;
-  } catch(e) {
-    console.warn(`snapshotWorksheet(${srcName}) error — non-fatal:`, e);
-    return false;
-  }
-}
-
-// Prune backup worksheets to keep only the most recent N per prefix.
-async function pruneBackups(itemId, prefix, keep = BACKUP_KEEP_COUNT) {
-  try {
-    const listUrl = `${workbookBase(itemId)}/worksheets`;
-    const r = await fetch(listUrl, {
-      headers: { "Authorization": `Bearer ${accessToken}` }
-    });
-    if (!r.ok) return;
-    const body = await r.json();
-    const matches = (body.value || [])
-      .filter(s => s.name && s.name.startsWith(prefix + "_"))
-      .sort((a, b) => a.name < b.name ? 1 : -1);  // newest first by name
-    const toDelete = matches.slice(keep);
-    for (const sheet of toDelete) {
-      await fetch(
-        `${workbookBase(itemId)}/worksheets('${encodeURIComponent(sheet.name)}')`,
-        {
-          method: "DELETE",
-          headers: { "Authorization": `Bearer ${accessToken}` }
-        }
-      ).catch(e => console.warn(`prune ${sheet.name} failed:`, e));
-    }
-  } catch(e) {
-    console.warn("pruneBackups error — non-fatal:", e);
-  }
-}
-
-// Health banner controls — UI surface for hardening #1.
+// ── Health banner controls (top-of-page yellow strip) ──
 function showHealthBanner(msg) {
   const banner = document.getElementById("healthBanner");
   const msgEl = document.getElementById("healthBannerMsg");
@@ -767,189 +411,68 @@ async function recheckHealth() {
   await loadDataFromExcel();
 }
 
-// Anti-wipe sanity check. Compares the proposed row count against the
-// current in-memory baseline. If shrunk by >50%, demand confirmation.
-// Returns true to proceed, false to abort.
-function antiWipeCheck(label, proposedRows, baselineRows, forceAllow) {
-  if (forceAllow) return true;
-  const p = proposedRows.length;
-  const b = baselineRows.length;
-  if (b === 0) return true;  // nothing to wipe, allow
-  if (p >= b * 0.5) return true;  // not a >50% shrink
-  const dropped = b - p;
-  const msg =
-    `ANTI-WIPE GUARD: saving ${label} would reduce row count from ${b} to ${p} ` +
-    `(${dropped} rows dropped, ${Math.round(dropped/b*100)}% of the sheet).\n\n` +
-    `This is a >50% shrink and is rarely intentional. If you really mean to ` +
-    `delete this many rows, click OK. Otherwise click Cancel — your OneDrive ` +
-    `data will be preserved.`;
-  return window.confirm(msg);
-}
+// 2026-05-25 - lastLoadSucceeded gate: kept as a UX hint to disable
+// mutations when the backend can't read orders. The backend itself
+// also rejects writes if the workbook is unreachable, so this is a
+// belt-and-suspenders safeguard for the UI.
+let lastLoadSucceeded = false;
 
-// Cached itemId of the data workbook — saves a metadata round-trip on
-// repeated load/save. Cleared on auth init.
-let excelItemId = null;
-
+// ── Data layer: /api/orders ──
 async function loadDataFromExcel() {
-  if (!sharedFolderId) { console.error("Shared folder not initialized"); return; }
   try {
     showLoading("Loading orders...");
-    let itemId;
-    try {
-      itemId = await resolveItemId(EXCEL_FILENAME);
-    } catch(fetchErr) {
-      hideLoading();
-      console.error("loadDataFromExcel resolve error:", fetchErr);
-      showHealthBanner(
-        "Couldn't reach the workbook on OneDrive (" + fetchErr.message + "). " +
-        "Your data is NOT lost — this is a read error."
-      );
-      lastLoadSucceeded = false;
-      return;
-    }
-    if (itemId === null) {
-      await createNewExcelFile();
-      return;
-    }
-    excelItemId = itemId;
-    // Workbook API — JSON, no file blob redirect, CORS-clean.
-    let rawOrders, rawHistory;
-    try {
-      rawOrders = await readWorksheet(itemId, "Orders");
-      rawHistory = await readWorksheet(itemId, "StatusHistory");
-    } catch(wbErr) {
-      hideLoading();
-      console.error("loadDataFromExcel workbook error:", wbErr);
-      showHealthBanner(
-        "Couldn't read the workbook sheets (" + wbErr.message + "). " +
-        "Your data is NOT lost — this is a read error."
-      );
-      lastLoadSucceeded = false;
-      return;
-    }
-    // Adapter so the rest of the function (originally written for
-    // xlsx.js sheet_to_json output) keeps working unchanged.
-    const wb = null;  // unused below now
-    // Stub the old call sites by aliasing — keeps the diff small.
-    // (rawOrders + rawHistory are already the parsed JSON.)
-    // Filter blank rows (e.g. the seed row left by createNewExcelFile, or
-    // any row whose OrderID is empty/whitespace). These show as a click-but-do-nothing
-    // entry in the table and can't be deleted via the UI.
-    const isReal = o => o && o.OrderID && String(o.OrderID).trim();
-    orders = rawOrders.filter(isReal);
-    statusHistory = rawHistory.filter(isReal);
-    lastLoadSucceeded = true;  // gate that allows writeExcelFile to proceed
+    const body = await apiJson("/orders");
+    orders = body.orders || [];
+    statusHistory = body.statusHistory || [];
+    lastLoadSucceeded = true;
     hideHealthBanner();
-    const purgedOrders = rawOrders.length - orders.length;
-    const purgedHistory = rawHistory.length - statusHistory.length;
     renderTable();
     updateStats();
-    // Silently rewrite the workbook to purge blank rows from the source file.
-    // 2026-05-25: via Workbook API now, no full-workbook upload.
-    if ((purgedOrders > 0 || purgedHistory > 0) && isAdmin) {
-      console.log(`Auto-cleanup: removing ${purgedOrders} blank order row(s) + ${purgedHistory} orphan history row(s)`);
-      try {
-        await writeWorksheet(itemId, "Orders", orders, ORDERS_HEADERS);
-        await writeWorksheet(itemId, "StatusHistory", statusHistory, HISTORY_HEADERS);
-      } catch(cleanupErr) {
-        console.warn("Auto-cleanup failed (non-fatal):", cleanupErr);
-      }
-    }
-  } catch(e) {
+  } catch (e) {
     console.error("loadDataFromExcel error:", e);
-    showHealthBanner("Unexpected load error: " + (e.message || e));
     lastLoadSucceeded = false;
+    const hint = e.status === 401 ? " (sign-in expired — refresh and sign in again)" :
+                 e.status === 503 && e.body && e.body.code === "OWNER_NOT_AUTHED" ?
+                   " — the app owner needs to re-run /api/auth/setup." :
+                 e.status === 503 && e.body && e.body.code === "OWNER_REFRESH_FAILED" ?
+                   " — the owner's stored refresh token is invalid; re-run /api/auth/setup." :
+                 "";
+    showHealthBanner("Couldn't load orders: " + e.message + hint);
   }
   hideLoading();
 }
 
-async function createNewExcelFile() {
+// ── Email send via backend ──
+async function sendEmail(recipient, subject, body) {
   try {
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([
-      { OrderID:"", Event:"", StartDate:"", EndDate:"", StartTime:"", EndTime:"",
-        Days:"", Coverage:"", NumGuards:"", Location:"", SiteContact:"",
-        ContactNumber:"", PPERequired:"", Duties:"", Status:"Pending",
-        UpdatedBy:"", LastUpdated:"", Archived:"No", PDFFilename:"" }
-    ]), "Orders");
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([
-      { OrderID:"", Status:"", ChangedBy:"", Timestamp:"", Notes:"" }
-    ]), "StatusHistory");
-    const ok = await uploadWorkbook(wb);
-    if (ok) await loadDataFromExcel();
-  } catch(e) { console.error("createNewExcelFile error:", e); hideLoading(); }
+    await apiJson("/email", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ to: recipient, subject, html: body }),
+    });
+  } catch (e) {
+    console.error("sendEmail error:", e);
+  }
 }
 
-async function uploadWorkbook(wb) {
-  const url = fileUrl(EXCEL_FILENAME);
-  if (!url) { console.error("uploadWorkbook: no fileUrl — folder not initialized"); return false; }
-  const bytes = XLSX.write(wb, { bookType: "xlsx", type: "array" });
-  const blob = new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-  const r = await fetch(url, {
-    method: "PUT",
-    headers: { "Authorization": `Bearer ${accessToken}`,
-      "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
-    body: blob
-  });
-  if (!r.ok) console.error("uploadWorkbook failed:", r.status, await r.text());
-  return r.ok;
+// Anti-wipe sanity check kept for any future bulk-mutation paths.
+// Currently no caller invokes a bulk replace; left in place so future
+// code that does can opt-in. Returns true to proceed.
+function antiWipeCheck(label, proposedRows, baselineRows, forceAllow) {
+  if (forceAllow) return true;
+  const p = proposedRows.length, b = baselineRows.length;
+  if (b === 0 || p >= b * 0.5) return true;
+  const dropped = b - p;
+  return window.confirm(
+    `ANTI-WIPE GUARD: ${label} would shrink from ${b} to ${p} rows ` +
+    `(${dropped} dropped). Proceed?`
+  );
 }
 
-async function writeExcelFile(updatedOrders, newHistoryEntry, forceHistoryRewrite) {
-  // 2026-05-25 SAFETY GUARD: if the most recent load failed, refuse to
-  // overwrite the remote file with potentially-empty in-memory state.
-  if (!lastLoadSucceeded) {
-    alert(
-      "Cannot save: orders haven't been loaded successfully yet.\n\n" +
-      "Refresh the page first. If the load keeps failing, contact David " +
-      "— your data on OneDrive is safe but the read is broken."
-    );
-    console.error(
-      "writeExcelFile REFUSED: lastLoadSucceeded=false."
-    );
-    return;
-  }
-  if (!excelItemId) {
-    alert("Workbook item id not cached. Refresh and try again.");
-    return;
-  }
-  // 2026-05-25 HARDENING #3: anti-wipe sanity check. If the proposed
-  // Orders rows would shrink the sheet by >50%, demand confirmation
-  // before we touch OneDrive.
-  if (!antiWipeCheck("Orders", updatedOrders, orders, false)) {
-    console.warn("writeExcelFile aborted by anti-wipe guard");
-    return;
-  }
-  try {
-    showLoading("Saving...");
-    // 2026-05-25 HARDENING #2: auto-snapshot BEFORE destructive write.
-    // Best-effort — does not block the save if the snapshot fails.
-    await snapshotWorksheet(excelItemId, "Orders", "Orders_Backup");
-    if (newHistoryEntry || forceHistoryRewrite) {
-      await snapshotWorksheet(excelItemId, "StatusHistory", "History_Backup");
-    }
-    // Workbook API per-sheet PATCH. No full-file download/upload —
-    // CORS-clean for browser fetch.
-    await writeWorksheet(excelItemId, "Orders", updatedOrders, ORDERS_HEADERS);
-    if (newHistoryEntry) {
-      statusHistory.push(newHistoryEntry);
-      await writeWorksheet(excelItemId, "StatusHistory", statusHistory, HISTORY_HEADERS);
-    } else if (forceHistoryRewrite) {
-      await writeWorksheet(excelItemId, "StatusHistory", statusHistory, HISTORY_HEADERS);
-    }
-    // Best-effort prune of old backups — never blocks the save flow.
-    pruneBackups(excelItemId, "Orders_Backup").catch(() => {});
-    pruneBackups(excelItemId, "History_Backup").catch(() => {});
-    await loadDataFromExcel();
-  } catch(e) {
-    console.error("writeExcelFile error:", e);
-    hideLoading();
-    alert(
-      "Save failed: " + (e && e.message ? e.message : String(e)) +
-      "\n\nYour OneDrive data was not overwritten. Refresh and try again."
-    );
-  }
-}
+// All legacy OneDrive plumbing (initSharedDrive, fileUrl,
+// readWorksheet, writeWorksheet, writeExcelFile, etc.) deleted
+// 2026-05-25 — backend now owns Graph IO via owner's stored token.
+
 
 // ── UI helpers ──
 function updateStats() {
@@ -1106,11 +629,21 @@ async function archiveOrder() {
   if (!selectedId) return;
   const order = orders.find(o => o.OrderID === selectedId);
   if (!order) return;
-  if (confirm("Archive this order? It will be hidden from the main list.")) {
-    order.Archived = "Yes";
-    order.LastUpdated = new Date().toLocaleString();
-    await writeExcelFile(orders);
+  if (!confirm("Archive this order? It will be hidden from the main list.")) return;
+  try {
+    showLoading("Archiving...");
+    await apiJson(`/orders/${encodeURIComponent(selectedId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fields: { Archived: "Yes" }, note: "Archived" }),
+    });
+    await loadDataFromExcel();
     closeDetail();
+  } catch (e) {
+    alert("Archive failed: " + e.message);
+    console.error(e);
+  } finally {
+    hideLoading();
   }
 }
 
@@ -1118,134 +651,60 @@ async function deleteOrder() {
   if (!isAdmin || !selectedId) return;
   const order = orders.find(o => o.OrderID === selectedId);
   if (!order) return;
-  const msg = `PERMANENTLY DELETE order ${selectedId}?\n\nThis will:\n• Remove the row from the spreadsheet\n• Delete the PDF (${order.PDFFilename || "none"}) from OneDrive\n• Remove its status history\n\nThis cannot be undone.`;
+  const msg = `PERMANENTLY DELETE order ${selectedId}?\n\nThis will remove the order row and its status history from the spreadsheet. This cannot be undone.`;
   if (!confirm(msg)) return;
   try {
     showLoading("Deleting...");
-    if (order.PDFFilename && sharedFolderId) {
-      const enc = encodeURIComponent(order.PDFFilename);
-      const delUrl = sharedDriveId
-        ? `https://graph.microsoft.com/v1.0/drives/${sharedDriveId}/items/${sharedFolderId}:/${enc}:`
-        : `https://graph.microsoft.com/v1.0/me/drive/items/${sharedFolderId}:/${enc}:`;
-      const r = await fetch(delUrl, {
-        method: "DELETE",
-        headers: { "Authorization": `Bearer ${accessToken}` }
-      });
-      if (!r.ok && r.status !== 404) {
-        console.error("PDF delete failed:", r.status);
-      }
-    }
-    orders = orders.filter(o => o.OrderID !== selectedId);
-    statusHistory = statusHistory.filter(h => h.OrderID !== selectedId);
-    await writeExcelFile(orders, null, true);
-    hideLoading();
+    await apiJson(`/orders/${encodeURIComponent(selectedId)}`, { method: "DELETE" });
+    await loadDataFromExcel();
     closeDetail();
-  } catch(e) {
-    hideLoading();
+  } catch (e) {
     alert("Delete failed: " + e.message);
     console.error(e);
+  } finally {
+    hideLoading();
   }
 }
 
 async function downloadPDF(filename) {
-  // 2026-05-25 second pass (David: still "Failed to fetch" — uploads
-  // work, downloads fail).
-  //
-  // Root cause: fetch on `/drive/items/{id}:/{path}:/content` returns
-  // a 302 redirect to a SharePoint / OneDrive blob URL on a different
-  // origin. The browser auto-follows the redirect, but the redirect
-  // target doesn't allow CORS for cross-origin browser requests with
-  // an Authorization header still attached — fetch raises
-  // TypeError("Failed to fetch"). Uploads (PUT) work because the
-  // response doesn't need to be a downloadable body.
-  //
-  // Fix: two-step download via @microsoft.graph.downloadUrl.
-  //   1) GET /drive/items/{id}:/{path} (metadata)
-  //      → JSON contains "@microsoft.graph.downloadUrl": pre-signed,
-  //         time-limited download URL (already auth'd inside the URL)
-  //   2) GET <downloadUrl> WITHOUT auth header
-  //      → returns the actual file content (no redirect, CORS-clean)
+  // 2026-05-25 — backend proxies the PDF bytes via /api/pdf/{filename}.
+  // The function reaches OneDrive with the owner's stored credentials
+  // and streams the file content back through our origin — no CORS,
+  // no admin scope, no per-user OneDrive share required.
   if (!filename) {
     alert("This order has no attached PDF.");
     return;
   }
-  if (!accessToken) {
+  if (!idToken) {
     alert("Not signed in yet — please wait a moment and try again.");
-    return;
-  }
-  const metaUrl = fileMetadataUrl(filename);
-  if (!metaUrl) {
-    alert(
-      "Shared drive not initialized yet.\n\n" +
-      "If you're an admin: refresh the page and retry.\n" +
-      "If you're a recipient: the admin needs to share the drive folder " +
-      "with you. Contact David."
-    );
     return;
   }
   try {
     showLoading("Downloading PDF...");
-    // Step 1 — metadata
-    const metaResp = await fetch(metaUrl, {
-      headers: { "Authorization": `Bearer ${accessToken}` }
-    });
-    if (!metaResp.ok) {
-      hideLoading();
-      alert(
-        `PDF not found in shared drive (HTTP ${metaResp.status}).\n\n` +
-        `Filename: ${filename}\n` +
-        (metaResp.status === 401 ? "Your session may have expired — refresh the page." :
-         metaResp.status === 404 ? "The file was deleted from OneDrive or the filename is wrong." :
-         "Check console for details.")
-      );
-      console.error("PDF metadata fetch failed", metaResp.status,
-                    await metaResp.text().catch(() => ""));
+    const r = await apiFetch(`/pdf/${encodeURIComponent(filename)}`);
+    if (!r.ok) {
+      const txt = await r.text().catch(() => "");
+      let body;
+      try { body = JSON.parse(txt); } catch (_) { body = {}; }
+      const explain = body.error || txt.slice(0, 200) || `HTTP ${r.status}`;
+      alert(`PDF download failed: ${explain}`);
       return;
     }
-    const meta = await metaResp.json();
-    const downloadUrl = meta["@microsoft.graph.downloadUrl"];
-    hideLoading();
-    if (!downloadUrl) {
-      alert(
-        "Graph API didn't return a download URL for this PDF.\n\n" +
-        `Filename: ${filename}\n` +
-        "This is unusual — check console for the metadata response."
-      );
-      console.error("No @microsoft.graph.downloadUrl in metadata:", meta);
-      return;
-    }
-    // Step 2 — browser-mediated download. We do NOT fetch the
-    // pre-signed URL: it doesn't allow cross-origin fetch (no
-    // Access-Control-Allow-Origin for our SWA), even though it's
-    // perfectly valid for top-level browser navigation. Treat it like
-    // an email-style download link — let the browser handle it.
-    // Confirmed 2026-05-25: a fetch() against the downloadUrl raised
-    // TypeError("Failed to fetch") via the diagnostic in this same
-    // function. The anchor-click pattern below bypasses fetch.
-    const a = document.createElement('a');
-    a.href = downloadUrl;
+    const blob = await r.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = objectUrl;
     a.download = filename;
     a.rel = "noopener";
-    a.target = "_blank";
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-  } catch(e) {
-    hideLoading();
-    const msg = (e && e.message) || String(e);
-    if (msg.includes("Failed to fetch")) {
-      alert(
-        "Couldn't reach Microsoft Graph to fetch the file metadata.\n\n" +
-        "Possible causes:\n" +
-        "  • You're offline or behind a corporate firewall\n" +
-        "  • Your sign-in expired — refresh the page\n\n" +
-        `Filename: ${filename}\n` +
-        "Check the browser console for the failing request."
-      );
-    } else {
-      alert("Error downloading PDF: " + msg);
-    }
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
+  } catch (e) {
+    alert("Error downloading PDF: " + e.message);
     console.error("downloadPDF error:", e);
+  } finally {
+    hideLoading();
   }
 }
 
@@ -1320,11 +779,23 @@ async function saveFieldChanges() {
     });
   }
 
-  order.UpdatedBy = author;
-  order.LastUpdated = ts;
-
-  // Persist with forceHistoryRewrite=true so the new history entries hit the sheet
-  await writeExcelFile(orders, null, true);
+  // Send all field changes in one PATCH. Note added to the most
+  // important change for the StatusHistory row. The backend appends
+  // a history row only when Status changes, so we explicitly push a
+  // composite note describing all field edits as a status-style entry.
+  const fieldUpdate = Object.fromEntries(changes.map(c => [c.field, c.newVal]));
+  const noteText = changes.map(c => `${c.field}: "${c.oldVal}" → "${c.newVal}"`).join(" | ");
+  try {
+    await apiJson(`/orders/${encodeURIComponent(selectedId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fields: fieldUpdate, note: noteText }),
+    });
+  } catch (e) {
+    alert("Save failed: " + e.message);
+    return;
+  }
+  await loadDataFromExcel();
 
   // Notify the admin (NOTIFY_RECIPIENTS — currently just David)
   const summary = changes
@@ -1343,8 +814,6 @@ async function saveFieldChanges() {
   }
 
   isEditingFields = false;
-  // writeExcelFile already reloaded data via loadDataFromExcel.
-  // selectOrder re-renders the detail panel in read mode.
   selectOrder(selectedId);
 }
 
@@ -1356,18 +825,17 @@ async function updateStatus() {
   const order = orders.find(o => o.OrderID === selectedId);
   if (!order) return;
 
-  const historyEntry = {
-    OrderID: selectedId,
-    Status: newStatus,
-    ChangedBy: updatedBy,
-    Timestamp: new Date().toLocaleString(),
-    Notes: note
-  };
-
-  order.Status = newStatus;
-  order.UpdatedBy = updatedBy;
-  order.LastUpdated = new Date().toLocaleString();
-  await writeExcelFile(orders, historyEntry);
+  try {
+    await apiJson(`/orders/${encodeURIComponent(selectedId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fields: { Status: newStatus }, note }),
+    });
+  } catch (e) {
+    alert("Status update failed: " + e.message);
+    return;
+  }
+  await loadDataFromExcel();
 
   if (newStatus === "Scheduled") {
     // Subject: plain text (no HTML interpretation). Body: HTML — escape all
@@ -1514,100 +982,87 @@ function renderExtractedFields(d) {
 }
 
 async function addExtractedOrder() {
-  // 2026-05-25 (David: "the green Add to Order List button doesn't even
-  // work from the client login"): the prior version silent-returned on
-  // !sharedFolderId, leaving the user with zero feedback. Make each
-  // failure path loud so the client sees what's wrong.
   if (!window.extractedData) {
     alert("Please upload a PDF first — the form fields haven't been extracted yet.");
     return;
   }
-  if (!sharedFolderId) {
-    alert(
-      "The ASP-CallUp shared folder isn't accessible from your account yet.\n\n" +
-      "This usually means the owner (David) hasn't shared it with " + currentUserUpn + ".\n\n" +
-      "Refresh the page after David signs in once. If you're still blocked, contact David."
-    );
-    return;
-  }
   if (!lastLoadSucceeded) {
-    alert(
-      "Orders haven't loaded yet, so the app can't safely save a new order.\n\n" +
-      "Refresh the page. If the load keeps failing, contact David."
-    );
+    alert("Orders haven't loaded yet. Refresh the page first.");
     return;
   }
-  const newOrderID = "TPO-" + new Date().getFullYear() + "-" + String(orders.length + 1).padStart(3, "0");
+  // Order ID is server-assigned via /api/orders, but we need a stable
+  // filename prefix for the PDF upload that won't collide. The server
+  // will not let two callers race a duplicate ID because the orders POST
+  // is atomic; in the rare collision the user just retries.
+  const provisionalId = "TPO-" + new Date().getFullYear() + "-" + String(orders.length + 1).padStart(3, "0");
   let pdfFilename = "";
 
-  if (window.uploadedPDFFile) {
-    try {
+  try {
+    if (window.uploadedPDFFile) {
       showLoading("Uploading PDF...");
-      // Sanitize the user-provided filename (path traversal, control chars, length).
-      const filename = newOrderID + "_" + safeFilename(window.uploadedPDFFile.name);
+      const filename = provisionalId + "_" + safeFilename(window.uploadedPDFFile.name);
       const ab = await window.uploadedPDFFile.arrayBuffer();
-      const r = await fetch(fileUrl(filename), {
-        method: "PUT",
-        headers: { "Authorization": `Bearer ${accessToken}`, "Content-Type": "application/pdf" },
-        body: new Blob([ab], { type: "application/pdf" })
-      });
-      if (r.ok) { pdfFilename = filename; }
-      else { console.error("PDF upload failed:", r.status); }
-    } catch(e) { console.error("PDF upload error:", e); }
+      try {
+        const up = await apiJson(`/pdf/${encodeURIComponent(filename)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/pdf" },
+          body: ab,
+        });
+        pdfFilename = up.filename || filename;
+      } catch (e) {
+        console.error("PDF upload error:", e);
+        // Non-fatal: continue creating the order without a PDF.
+      }
+    }
+
+    const orderBody = {
+      Event: document.getElementById("ef_event").value || "",
+      StartDate: document.getElementById("ef_startDate").value || "",
+      EndDate: document.getElementById("ef_endDate").value || "",
+      StartTime: document.getElementById("ef_startTime").value || "",
+      EndTime: document.getElementById("ef_endTime").value || "",
+      NumGuards: document.getElementById("ef_numGuards").value || "1",
+      Location: document.getElementById("ef_meetingLocation").value || "",
+      SiteContact: document.getElementById("ef_siteContact").value || "",
+      ContactNumber: document.getElementById("ef_contactNumber").value || "",
+      Days: document.getElementById("ef_days").value || "",
+      Coverage: document.getElementById("ef_coverage").value || "",
+      PPERequired: document.getElementById("ef_ppe").value || "",
+      Duties: document.getElementById("ef_duties").value || "",
+      PDFFilename: pdfFilename,
+    };
+    showLoading("Creating order...");
+    const created = await apiJson("/orders", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ order: orderBody, historyNote: "Order created from PDF upload" }),
+    });
+    const newOrder = created.order;
+    await loadDataFromExcel();
+
+    const newSubject = `New Temporary Post Order Submitted: ${newOrder.OrderID}`;
+    const newBody = `<h2>New Temporary Post Order</h2>
+       <p><strong>Order ID:</strong> ${escHtml(newOrder.OrderID)}</p>
+       <p><strong>Event:</strong> ${escHtml(newOrder.Event)}</p>
+       <p><strong>Start Date:</strong> ${escHtml(newOrder.StartDate)}</p>
+       <p><strong>End Date:</strong> ${escHtml(newOrder.EndDate)}</p>
+       <p><strong>Guards:</strong> ${escHtml(newOrder.NumGuards)}</p>
+       <p><strong>Location:</strong> ${escHtml(newOrder.Location)}</p>
+       <p><strong>Site Contact:</strong> ${escHtml(newOrder.SiteContact)}</p>
+       <p><strong>Uploaded by:</strong> ${escHtml(displayName(currentUserUpn))}</p>
+       <p>Please review and update the status in the ASP Call Up Form system.</p>`;
+    for (const recipient of NOTIFY_RECIPIENTS) {
+      await sendEmail(recipient, newSubject, newBody);
+    }
+
+    document.getElementById("extractedCard").style.display = "none";
+    window.uploadedPDFFile = null;
+  } catch (e) {
+    console.error("addExtractedOrder error:", e);
+    alert("Couldn't create order: " + e.message);
+  } finally {
+    hideLoading();
   }
-
-  const newOrder = {
-    OrderID: newOrderID,
-    Event: document.getElementById("ef_event").value || "",
-    StartDate: document.getElementById("ef_startDate").value || "",
-    EndDate: document.getElementById("ef_endDate").value || "",
-    StartTime: document.getElementById("ef_startTime").value || "",
-    EndTime: document.getElementById("ef_endTime").value || "",
-    NumGuards: document.getElementById("ef_numGuards").value || "1",
-    Location: document.getElementById("ef_meetingLocation").value || "",
-    SiteContact: document.getElementById("ef_siteContact").value || "",
-    ContactNumber: document.getElementById("ef_contactNumber").value || "",
-    Days: document.getElementById("ef_days").value || "",
-    Coverage: document.getElementById("ef_coverage").value || "",
-    PPERequired: document.getElementById("ef_ppe").value || "",
-    Duties: document.getElementById("ef_duties").value || "",
-    Status: "Pending", UpdatedBy: `${displayName(currentUserUpn)} (PDF Upload)`,
-    LastUpdated: new Date().toLocaleString(),
-    Archived: "No", PDFFilename: pdfFilename
-  };
-  orders.push(newOrder);
-
-  const historyEntry = {
-    OrderID: newOrderID, Status: "Pending",
-    ChangedBy: `${displayName(currentUserUpn)} (PDF Upload)`, Timestamp: new Date().toLocaleString(),
-    Notes: "Order created from PDF upload"
-  };
-  await writeExcelFile(orders, historyEntry);
-
-  // 2026-05-25 fix (David: "the order doesn't show up when you add to
-  // orders. you have to switch that status and go back"): orders.push
-  // mutates the in-memory array but the DOM doesn't refresh until the
-  // status filter changes (line 165 onchange=renderTable). Re-render
-  // now so the new row appears immediately.
-  renderTable();
-
-  const newSubject = `New Temporary Post Order Submitted: ${newOrderID}`;
-  const newBody = `<h2>New Temporary Post Order</h2>
-     <p><strong>Order ID:</strong> ${escHtml(newOrderID)}</p>
-     <p><strong>Event:</strong> ${escHtml(newOrder.Event)}</p>
-     <p><strong>Start Date:</strong> ${escHtml(newOrder.StartDate)}</p>
-     <p><strong>End Date:</strong> ${escHtml(newOrder.EndDate)}</p>
-     <p><strong>Guards:</strong> ${escHtml(newOrder.NumGuards)}</p>
-     <p><strong>Location:</strong> ${escHtml(newOrder.Location)}</p>
-     <p><strong>Site Contact:</strong> ${escHtml(newOrder.SiteContact)}</p>
-     <p><strong>Uploaded by:</strong> ${escHtml(displayName(currentUserUpn))}</p>
-     <p>Please review and update the status in the ASP Call Up Form system.</p>`;
-  for (const recipient of NOTIFY_RECIPIENTS) {
-    await sendEmail(recipient, newSubject, newBody);
-  }
-
-  document.getElementById("extractedCard").style.display = "none";
-  window.uploadedPDFFile = null;
 }
 
 function cancelExtracted() {
