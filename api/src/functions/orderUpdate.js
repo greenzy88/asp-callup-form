@@ -47,13 +47,36 @@ app.http("orderUpdate", {
         LastUpdated: ts.toLocaleString(),
       });
       orderRows[idx] = after;
-      if (fields.Status && fields.Status !== before.Status) {
+
+      // Diff every non-meta field so non-status edits (Days, EndTime, ...)
+      // also leave an audit trail in StatusHistory.
+      const META_FIELDS = new Set(["UpdatedBy", "LastUpdated", "OrderID"]);
+      const norm = (v) => (v === undefined || v === null ? "" : String(v));
+      const truncate = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+      const changes = [];
+      for (const k of Object.keys(fields)) {
+        if (META_FIELDS.has(k)) continue;
+        const a = norm(before[k]);
+        const b = norm(fields[k]);
+        if (a !== b) changes.push({ field: k, from: truncate(a, 80), to: truncate(b, 80) });
+      }
+      const statusChange = changes.find((c) => c.field === "Status");
+      const nonStatusChanges = changes.filter((c) => c.field !== "Status");
+
+      if (statusChange || nonStatusChanges.length) {
+        const noteParts = [];
+        if (body.note) noteParts.push(body.note);
+        if (nonStatusChanges.length) {
+          noteParts.push(
+            nonStatusChanges.map((c) => `${c.field}: "${c.from}" → "${c.to}"`).join("; ")
+          );
+        }
         histRows.push({
           OrderID: before.OrderID,
-          Status: fields.Status,
+          Status: statusChange ? statusChange.to : (nonStatusChanges.length ? "Edited" : before.Status),
           ChangedBy: upn,
           Timestamp: ts.toLocaleString(),
-          Notes: body.note || "",
+          Notes: noteParts.join(" | "),
         });
       }
 

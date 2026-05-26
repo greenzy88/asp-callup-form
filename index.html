@@ -807,17 +807,15 @@ async function saveFieldChanges() {
     });
   }
 
-  // Send all field changes in one PATCH. Note added to the most
-  // important change for the StatusHistory row. The backend appends
-  // a history row only when Status changes, so we explicitly push a
-  // composite note describing all field edits as a status-style entry.
+  // Send all field changes in one PATCH. Backend computes the
+  // authoritative field-diff for StatusHistory using its own `before`
+  // snapshot, so no client-side noteText is needed here.
   const fieldUpdate = Object.fromEntries(changes.map(c => [c.field, c.newVal]));
-  const noteText = changes.map(c => `${c.field}: "${c.oldVal}" → "${c.newVal}"`).join(" | ");
   try {
     await apiJson(`/orders/${encodeURIComponent(selectedId)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fields: fieldUpdate, note: noteText }),
+      body: JSON.stringify({ fields: fieldUpdate }),
     });
   } catch (e) {
     alert("Save failed: " + e.message);
