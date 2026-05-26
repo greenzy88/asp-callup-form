@@ -421,12 +421,20 @@ async function initSharedDrive() {
     console.log("Drive: owner mode, folder =", folderId);
 
   } else {
-    // Non-owner: discover the shared folder
+    // Non-owner: discover the shared folder via sharedWithMe.
     const r = await fetch(
       "https://graph.microsoft.com/v1.0/me/drive/sharedWithMe",
       { headers: { "Authorization": `Bearer ${accessToken}` } }
     );
-    if (!r.ok) { console.error("sharedWithMe failed:", r.status); return; }
+    if (!r.ok) {
+      console.error("sharedWithMe failed:", r.status);
+      showHealthBanner(
+        "Couldn't read sharedWithMe (HTTP " + r.status + "). " +
+        "The owner (David) may not have shared the ASP-CallUp folder with " +
+        currentUserUpn + " yet. Contact David."
+      );
+      return;
+    }
     const item = ((await r.json()).value || []).find(i =>
       i.name === FOLDER_NAME && i.remoteItem
     );
@@ -436,6 +444,11 @@ async function initSharedDrive() {
       console.log("Drive: non-owner mode, remote drive =", sharedDriveId);
     } else {
       console.warn("Shared folder not found — owner may not have shared it yet.");
+      showHealthBanner(
+        "The ASP-CallUp shared folder isn't visible to " + currentUserUpn + ". " +
+        "David needs to sign in once so the share gets re-invited. " +
+        "Once that's done, refresh this page."
+      );
     }
   }
 }
@@ -1469,7 +1482,29 @@ function renderExtractedFields(d) {
 }
 
 async function addExtractedOrder() {
-  if (!window.extractedData || !sharedFolderId) return;
+  // 2026-05-25 (David: "the green Add to Order List button doesn't even
+  // work from the client login"): the prior version silent-returned on
+  // !sharedFolderId, leaving the user with zero feedback. Make each
+  // failure path loud so the client sees what's wrong.
+  if (!window.extractedData) {
+    alert("Please upload a PDF first — the form fields haven't been extracted yet.");
+    return;
+  }
+  if (!sharedFolderId) {
+    alert(
+      "The ASP-CallUp shared folder isn't accessible from your account yet.\n\n" +
+      "This usually means the owner (David) hasn't shared it with " + currentUserUpn + ".\n\n" +
+      "Refresh the page after David signs in once. If you're still blocked, contact David."
+    );
+    return;
+  }
+  if (!lastLoadSucceeded) {
+    alert(
+      "Orders haven't loaded yet, so the app can't safely save a new order.\n\n" +
+      "Refresh the page. If the load keeps failing, contact David."
+    );
+    return;
+  }
   const newOrderID = "TPO-" + new Date().getFullYear() + "-" + String(orders.length + 1).padStart(3, "0");
   let pdfFilename = "";
 
