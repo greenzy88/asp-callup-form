@@ -428,6 +428,21 @@ function fileUrl(filename) {
   return `https://graph.microsoft.com/v1.0/drives/${sharedDriveId}/items/${sharedFolderId}:/${enc}:/content`;
 }
 
+// 2026-05-25 — metadata URL (no :/content suffix). Returns JSON with
+// @microsoft.graph.downloadUrl, a pre-signed URL the browser can fetch
+// without CORS issues. Avoids the 302-redirect-to-SharePoint problem
+// that breaks GET :/content from browser fetch (David: uploads work,
+// downloads fail with "Failed to fetch" — confirmed not a null-URL
+// nor token issue since PUT to the SAME endpoint works).
+function fileMetadataUrl(filename) {
+  if (!sharedFolderId) return null;
+  const enc = encodeURIComponent(filename);
+  if (!sharedDriveId) {
+    return `https://graph.microsoft.com/v1.0/me/drive/items/${sharedFolderId}:/${enc}`;
+  }
+  return `https://graph.microsoft.com/v1.0/drives/${sharedDriveId}/items/${sharedFolderId}:/${enc}`;
+}
+
 // ── Email ──
 async function sendEmail(recipient, subject, body) {
   try {
@@ -736,20 +751,108 @@ async function deleteOrder() {
 }
 
 async function downloadPDF(filename) {
+  // 2026-05-25 second pass (David: still "Failed to fetch" — uploads
+  // work, downloads fail).
+  //
+  // Root cause: fetch on `/drive/items/{id}:/{path}:/content` returns
+  // a 302 redirect to a SharePoint / OneDrive blob URL on a different
+  // origin. The browser auto-follows the redirect, but the redirect
+  // target doesn't allow CORS for cross-origin browser requests with
+  // an Authorization header still attached — fetch raises
+  // TypeError("Failed to fetch"). Uploads (PUT) work because the
+  // response doesn't need to be a downloadable body.
+  //
+  // Fix: two-step download via @microsoft.graph.downloadUrl.
+  //   1) GET /drive/items/{id}:/{path} (metadata)
+  //      → JSON contains "@microsoft.graph.downloadUrl": pre-signed,
+  //         time-limited download URL (already auth'd inside the URL)
+  //   2) GET <downloadUrl> WITHOUT auth header
+  //      → returns the actual file content (no redirect, CORS-clean)
+  if (!filename) {
+    alert("This order has no attached PDF.");
+    return;
+  }
+  if (!accessToken) {
+    alert("Not signed in yet — please wait a moment and try again.");
+    return;
+  }
+  const metaUrl = fileMetadataUrl(filename);
+  if (!metaUrl) {
+    alert(
+      "Shared drive not initialized yet.\n\n" +
+      "If you're an admin: refresh the page and retry.\n" +
+      "If you're a recipient: the admin needs to share the drive folder " +
+      "with you. Contact David."
+    );
+    return;
+  }
   try {
     showLoading("Downloading PDF...");
-    const r = await fetch(fileUrl(filename), {
+    // Step 1 — metadata
+    const metaResp = await fetch(metaUrl, {
       headers: { "Authorization": `Bearer ${accessToken}` }
     });
+    if (!metaResp.ok) {
+      hideLoading();
+      alert(
+        `PDF not found in shared drive (HTTP ${metaResp.status}).\n\n` +
+        `Filename: ${filename}\n` +
+        (metaResp.status === 401 ? "Your session may have expired — refresh the page." :
+         metaResp.status === 404 ? "The file was deleted from OneDrive or the filename is wrong." :
+         "Check console for details.")
+      );
+      console.error("PDF metadata fetch failed", metaResp.status,
+                    await metaResp.text().catch(() => ""));
+      return;
+    }
+    const meta = await metaResp.json();
+    const downloadUrl = meta["@microsoft.graph.downloadUrl"];
+    if (!downloadUrl) {
+      hideLoading();
+      alert(
+        "Graph API didn't return a download URL for this PDF.\n\n" +
+        `Filename: ${filename}\n` +
+        "This is unusual — check console for the metadata response."
+      );
+      console.error("No @microsoft.graph.downloadUrl in metadata:", meta);
+      return;
+    }
+    // Step 2 — fetch the pre-signed URL WITHOUT auth header (the URL
+    // is already authenticated). This avoids the redirect-CORS issue.
+    const fileResp = await fetch(downloadUrl);
     hideLoading();
-    if (!r.ok) { alert("PDF not found in shared drive."); return; }
-    const blob = await r.blob();
-    const url = window.URL.createObjectURL(blob);
+    if (!fileResp.ok) {
+      alert(
+        `Couldn't download the file content (HTTP ${fileResp.status}).\n\n` +
+        `Filename: ${filename}\nCheck console for details.`
+      );
+      console.error("PDF content fetch failed", fileResp.status);
+      return;
+    }
+    const blob = await fileResp.blob();
+    const blobUrl = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = filename;
+    a.href = blobUrl; a.download = filename;
     document.body.appendChild(a); a.click();
-    window.URL.revokeObjectURL(url);
-  } catch(e) { hideLoading(); alert("Error downloading PDF: " + e.message); }
+    window.URL.revokeObjectURL(blobUrl);
+  } catch(e) {
+    hideLoading();
+    const msg = (e && e.message) || String(e);
+    if (msg.includes("Failed to fetch")) {
+      alert(
+        "Couldn't reach the download URL.\n\n" +
+        "Possible causes:\n" +
+        "  • You're offline or behind a corporate firewall\n" +
+        "  • The pre-signed download URL expired (rare — usually valid 1h)\n" +
+        "  • Your sign-in expired — refresh the page\n\n" +
+        `Filename: ${filename}\n` +
+        "Check the browser console for the failing URL."
+      );
+    } else {
+      alert("Error downloading PDF: " + msg);
+    }
+    console.error("downloadPDF error:", e);
+  }
 }
 
 function closeDetail() {
@@ -1064,6 +1167,13 @@ async function addExtractedOrder() {
     Notes: "Order created from PDF upload"
   };
   await writeExcelFile(orders, historyEntry);
+
+  // 2026-05-25 fix (David: "the order doesn't show up when you add to
+  // orders. you have to switch that status and go back"): orders.push
+  // mutates the in-memory array but the DOM doesn't refresh until the
+  // status filter changes (line 165 onchange=renderTable). Re-render
+  // now so the new row appears immediately.
+  renderTable();
 
   const newSubject = `New Temporary Post Order Submitted: ${newOrderID}`;
   const newBody = `<h2>New Temporary Post Order</h2>
