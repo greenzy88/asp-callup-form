@@ -62,8 +62,13 @@ app.http("orderUpdate", {
       }
       const statusChange = changes.find((c) => c.field === "Status");
       const nonStatusChanges = changes.filter((c) => c.field !== "Status");
+      // 2026-05-27 — a note alone (with no field changes) should still
+      // produce a StatusHistory row. Prior condition only fired when a
+      // field actually changed, so "add a note without changing status"
+      // dropped silently.
+      const hasNote = !!(body.note && String(body.note).trim());
 
-      if (statusChange || nonStatusChanges.length) {
+      if (statusChange || nonStatusChanges.length || hasNote) {
         const noteParts = [];
         if (body.note) noteParts.push(body.note);
         if (nonStatusChanges.length) {
@@ -73,7 +78,9 @@ app.http("orderUpdate", {
         }
         histRows.push({
           OrderID: before.OrderID,
-          Status: statusChange ? statusChange.to : (nonStatusChanges.length ? "Edited" : before.Status),
+          Status: statusChange
+            ? statusChange.to
+            : (nonStatusChanges.length ? "Edited" : before.Status),
           ChangedBy: upn,
           Timestamp: ts.toLocaleString(),
           Notes: noteParts.join(" | "),
