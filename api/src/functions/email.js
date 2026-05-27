@@ -20,8 +20,41 @@ app.http("email", {
       const to = body && body.to;
       const subject = body && body.subject;
       const html = body && body.html;
+      const attachmentFilename = body && body.attachmentFilename;
       if (!to || !subject || !html) {
         return { status: 400, jsonBody: { error: "Body must include to/subject/html" } };
+      }
+
+      // 2026-05-27 — optionally attach a PDF from the owner's ASP-CallUp
+      // folder. Same filename safety as pdfDownload. Graph sendMail
+      // supports file attachments up to 4 MB inline; typical TPO PDFs
+      // are ~400 KB so we stay well within. A larger attachment would
+      // need createUploadSession; we cap the body to fail fast.
+      const attachments = [];
+      if (attachmentFilename) {
+        const SAFE_NAME = /^[\w\-. ]{1,200}\.pdf$/i;
+        if (!SAFE_NAME.test(attachmentFilename)) {
+          return { status: 400, jsonBody: { error: "Bad attachmentFilename" } };
+        }
+        const r = await graphFetch(
+          `/me/drive/root:/ASP-CallUp/${encodeURIComponent(attachmentFilename)}:/content`,
+          { method: "GET", redirect: "follow" }
+        );
+        if (!r.ok) {
+          ctx.warn(`email: skipping attachment ${attachmentFilename}: Graph ${r.status}`);
+        } else {
+          const pdfBuf = Buffer.from(await r.arrayBuffer());
+          if (pdfBuf.length > 4 * 1024 * 1024) {
+            ctx.warn(`email: attachment ${attachmentFilename} > 4 MB, skipping`);
+          } else {
+            attachments.push({
+              "@odata.type": "#microsoft.graph.fileAttachment",
+              name: attachmentFilename,
+              contentType: "application/pdf",
+              contentBytes: pdfBuf.toString("base64"),
+            });
+          }
+        }
       }
 
       const payload = {
@@ -31,6 +64,7 @@ app.http("email", {
           toRecipients: (Array.isArray(to) ? to : [to]).map((addr) => ({
             emailAddress: { address: String(addr) },
           })),
+          ...(attachments.length ? { attachments } : {}),
         },
         saveToSentItems: true,
       };

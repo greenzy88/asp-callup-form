@@ -471,12 +471,14 @@ async function loadDataFromExcel() {
 }
 
 // ── Email send via backend ──
-async function sendEmail(recipient, subject, body) {
+async function sendEmail(recipient, subject, body, attachmentFilename) {
   try {
+    const payload = { to: recipient, subject, html: body };
+    if (attachmentFilename) payload.attachmentFilename = attachmentFilename;
     await apiJson("/email", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ to: recipient, subject, html: body }),
+      body: JSON.stringify(payload),
     });
   } catch (e) {
     console.error("sendEmail error:", e);
@@ -836,7 +838,7 @@ async function saveFieldChanges() {
      <p><strong>Changes:</strong></p>
      <ul>${summary}</ul>`;
   for (const recipient of NOTIFY_RECIPIENTS) {
-    await sendEmail(recipient, subject, body);
+    await sendEmail(recipient, subject, body, order.PDFFilename);
   }
 
   isEditingFields = false;
@@ -878,7 +880,7 @@ async function updateStatus() {
        <p><strong>Updated by:</strong> ${escHtml(updatedBy)}</p>
        <p>Your temporary post order has been scheduled and approved. Please confirm receipt.</p>`;
     for (const recipient of NOTIFY_RECIPIENTS) {
-      await sendEmail(recipient, subject, body);
+      await sendEmail(recipient, subject, body, order.PDFFilename);
     }
   }
 
@@ -1078,7 +1080,7 @@ async function addExtractedOrder() {
        <p><strong>Uploaded by:</strong> ${escHtml(displayName(currentUserUpn))}</p>
        <p>Please review and update the status in the ASP Call Up Form system.</p>`;
     for (const recipient of NOTIFY_RECIPIENTS) {
-      await sendEmail(recipient, newSubject, newBody);
+      await sendEmail(recipient, newSubject, newBody, newOrder.PDFFilename);
     }
 
     document.getElementById("extractedCard").style.display = "none";
