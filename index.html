@@ -849,8 +849,11 @@ async function saveFieldChanges() {
      <p><strong>Timestamp:</strong> ${ts}</p>
      <p><strong>Changes:</strong></p>
      <ul>${summary}</ul>`;
+  // 2026-05-27 — PDF only attached on the original "submitted"
+  // notification. Lifecycle updates (changed/scheduled/completed)
+  // skip the attachment per David's directive.
   for (const recipient of NOTIFY_RECIPIENTS) {
-    await sendEmail(recipient, subject, body, order.PDFFilename);
+    await sendEmail(recipient, subject, body);
   }
 
   isEditingFields = false;
@@ -892,7 +895,7 @@ async function updateStatus() {
        <p><strong>Updated by:</strong> ${escHtml(updatedBy)}</p>
        <p>Your temporary post order has been scheduled and approved. Please confirm receipt.</p>`;
     for (const recipient of NOTIFY_RECIPIENTS) {
-      await sendEmail(recipient, subject, body, order.PDFFilename);
+      await sendEmail(recipient, subject, body);
     }
   } else if (newStatus === "Completed") {
     const subject = `Call Up Request Completed: ${selectedId} - ${order.Event}`;
@@ -907,7 +910,7 @@ async function updateStatus() {
        ${note ? `<p><strong>Note:</strong> ${escHtml(note)}</p>` : ""}
        <p>This temporary post order has been marked completed.</p>`;
     for (const recipient of NOTIFY_RECIPIENTS) {
-      await sendEmail(recipient, subject, body, order.PDFFilename);
+      await sendEmail(recipient, subject, body);
     }
   }
 
@@ -947,7 +950,7 @@ async function markCompleted() {
      <p><strong>Marked completed by:</strong> ${escHtml(updatedBy)}</p>
      <p>This temporary post order has been marked completed.</p>`;
   for (const recipient of NOTIFY_RECIPIENTS) {
-    await sendEmail(recipient, subject, body, order.PDFFilename);
+    await sendEmail(recipient, subject, body);
   }
   await selectOrder(selectedId);
 }
