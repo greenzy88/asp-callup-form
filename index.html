@@ -841,8 +841,8 @@ async function saveFieldChanges() {
   const summary = changes
     .map(c => `<li><strong>${c.field}:</strong> "${escAttr(c.oldVal)}" → "${escAttr(c.newVal)}"</li>`)
     .join("");
-  const subject = `Order Fields Edited: ${selectedId} — ${order.Event || ''}`;
-  const body = `<h2>Post Order Fields Updated</h2>
+  const subject = `Call Up Request Changed: ${selectedId} — ${order.Event || ''}`;
+  const body = `<h2>Call Up Request Changed</h2>
      <p><strong>Order ID:</strong> ${selectedId}</p>
      <p><strong>Event:</strong> ${order.Event || ''}</p>
      <p><strong>Edited by:</strong> ${author}</p>
@@ -881,8 +881,8 @@ async function updateStatus() {
     // Subject: plain text (no HTML interpretation). Body: HTML — escape all
     // user-controlled values so an attacker who poisoned a field can't inject
     // markup/script into the email (some mail clients honor inline HTML).
-    const subject = `Post Order Scheduled: ${selectedId} - ${order.Event}`;
-    const body = `<h2>Post Order Scheduled</h2>
+    const subject = `Call Up Request Scheduled: ${selectedId} - ${order.Event}`;
+    const body = `<h2>Call Up Request Scheduled</h2>
        <p><strong>Order ID:</strong> ${escHtml(selectedId)}</p>
        <p><strong>Event:</strong> ${escHtml(order.Event)}</p>
        <p><strong>Start Date:</strong> ${escHtml(order.StartDate)}</p>
@@ -895,8 +895,8 @@ async function updateStatus() {
       await sendEmail(recipient, subject, body, order.PDFFilename);
     }
   } else if (newStatus === "Completed") {
-    const subject = `Post Order Completed: ${selectedId} - ${order.Event}`;
-    const body = `<h2>Post Order Completed</h2>
+    const subject = `Call Up Request Completed: ${selectedId} - ${order.Event}`;
+    const body = `<h2>Call Up Request Completed</h2>
        <p><strong>Order ID:</strong> ${escHtml(selectedId)}</p>
        <p><strong>Event:</strong> ${escHtml(order.Event)}</p>
        <p><strong>Start Date:</strong> ${escHtml(order.StartDate)}</p>
@@ -936,8 +936,8 @@ async function markCompleted() {
   }
   await loadDataFromExcel();
   const updatedBy = displayName(currentUserUpn);
-  const subject = `Post Order Completed: ${selectedId} - ${order.Event}`;
-  const body = `<h2>Post Order Completed</h2>
+  const subject = `Call Up Request Completed: ${selectedId} - ${order.Event}`;
+  const body = `<h2>Call Up Request Completed</h2>
      <p><strong>Order ID:</strong> ${escHtml(selectedId)}</p>
      <p><strong>Event:</strong> ${escHtml(order.Event)}</p>
      <p><strong>Start Date:</strong> ${escHtml(order.StartDate)}</p>
@@ -1180,8 +1180,8 @@ async function addExtractedOrder() {
     const newOrder = created.order;
     await loadDataFromExcel();
 
-    const newSubject = `New Temporary Post Order Submitted: ${newOrder.OrderID}`;
-    const newBody = `<h2>New Temporary Post Order</h2>
+    const newSubject = `New Call Up Request Submitted: ${newOrder.OrderID}`;
+    const newBody = `<h2>New Call Up Request Submitted</h2>
        <p><strong>Order ID:</strong> ${escHtml(newOrder.OrderID)}</p>
        <p><strong>Event:</strong> ${escHtml(newOrder.Event)}</p>
        <p><strong>Start Date:</strong> ${escHtml(newOrder.StartDate)}</p>
