@@ -579,7 +579,7 @@ function selectOrder(id) {
     ? ppeArray.map(p => `<span class="ppe-chip">&#x2713; ${escHtml(p.trim())}</span>`).join("")
     : '<span class="text-muted small">None specified</span>';
   const pdfLink = o.PDFFilename
-    ? `<div class="field-row"><span class="field-label">PDF</span><span class="field-value"><a href="#" class="js-pdf-link" data-pdf="${escAttr(o.PDFFilename)}" style="color:#003366;text-decoration:underline;">View PDF</a></span></div>`
+    ? `<div class="field-row"><span class="field-label">PDF</span><span class="field-value"><a href="#" class="js-pdf-link" data-pdf="${escAttr(o.PDFFilename)}" style="color:#003366;text-decoration:underline;">View Full Document</a></span></div>`
     : '';
 
   // Anyone authenticated (admin, manager, client) can edit fields
@@ -1024,9 +1024,11 @@ function parseFields(text, filename) {
     // (times, counts). Lookbehind/lookahead require non-digit borders
     // so real "1 hour 23 min"-style sequences are safe. Order matters
     // — longer patterns first so 4-digit cases consume before 3-digit.
-    .replace(/(?<=\D)(\d)\s(\d)\s(\d)\s(\d)(?=\D)/g, "$1$2$3$4")
-    .replace(/(?<=\D)(\d)\s(\d)\s(\d\d)(?=\D)/g, "$1$2$3")   // "1 7 00"
-    .replace(/(?<=\D)(\d\d)\s(\d)\s(\d)(?=\D)/g, "$1$2$3")   // "17 0 0"
+    .replace(/(?<=\D)(\d)\s(\d)\s(\d)\s(\d)(?=\D)/g, "$1$2$3$4")  // "1 7 0 0"
+    .replace(/(?<=\D)(\d)\s(\d)\s(\d\d)(?=\D)/g, "$1$2$3")        // "1 7 00"
+    .replace(/(?<=\D)(\d\d)\s(\d)\s(\d)(?=\D)/g, "$1$2$3")        // "17 0 0"
+    .replace(/(?<=\D)(\d)\s(\d\d\d)(?=\D)/g, "$1$2")              // "0 600" → "0600"
+    .replace(/(?<=\D)(\d\d\d)\s(\d)(?=\D)/g, "$1$2")              // "060 0" → "0600"
     .replace(/(?<=\D)(\d)\s(\d)\s(\d)(?=\D)/g, "$1$2$3");
 
   // Strip checkbox bleed-over from two-column PDF table layout
@@ -1076,9 +1078,15 @@ function parseFields(text, filename) {
   const coverage = /☒\s*Specific\s*Hours/i.test(text) ? 'Specific Hours' :
                    /☒\s*Continuous/i.test(text) ? 'Continuous' : '';
 
-  // Duties: section 1.0 up to 2.0
+  // Duties: section 1.0 up to 2.0. PDFs use either "- " or "• " for
+  // bullets; both get normalized to "\n• " so the rendered detail shows
+  // an itemized list rather than one wall-of-text paragraph. Lookahead
+  // on (?=\S) avoids creating a leading "\n• " on the very first bullet
+  // by requiring the dash/bullet to be followed by content.
   const dutiesM = text.match(/1\.0\s*Post Description[\s\S]+?Duties\s*([\s\S]+?)(?=2\.0\s*Site|Page\s*\d|$)/i);
-  const duties = dutiesM ? dutiesM[1].replace(/\s*-\s+/g, '\n• ').trim() : '';
+  const duties = dutiesM
+    ? dutiesM[1].replace(/\s*[-•]\s+(?=\S)/g, '\n• ').replace(/^\s*\n/, '').trim()
+    : '';
 
   return {
     event: between("Event\\s*\\/\\s*Project", "Start Date").replace(/^[:\s]+/, "").trim() || "See PDF",
