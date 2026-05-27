@@ -3,7 +3,7 @@
 
 const { app } = require("@azure/functions");
 const { requireUser } = require("../shared/auth");
-const { canManageStatus } = require("../shared/roles");
+const { canManageStatus, canEdit } = require("../shared/roles");
 const {
   readSheet, writeSheet, workbookItemId,
   ORDERS_HEADERS, HISTORY_HEADERS,
@@ -17,14 +17,22 @@ app.http("orderUpdate", {
   handler: async (req, ctx) => {
     try {
       const { upn } = await requireUser(req);
-      if (!canManageStatus(upn)) {
-        return { status: 403, jsonBody: { error: "Only managers can update order status" } };
-      }
       const orderId = req.params.orderId;
       const body = await req.json().catch(() => ({}));
       const fields = (body && body.fields) || {};
       if (!fields || typeof fields !== "object") {
         return { status: 400, jsonBody: { error: "Body.fields must be an object" } };
+      }
+      // Managers + owner can change any status. Clients (canEdit but not
+      // canManageStatus) can ONLY mark an order Completed — and only as a
+      // single-field Status change (no smuggling other field edits in
+      // the same call).
+      if (!canManageStatus(upn)) {
+        const fieldKeys = Object.keys(fields);
+        const isCompletedOnly = fieldKeys.length === 1 && fields.Status === "Completed";
+        if (!canEdit(upn) || !isCompletedOnly) {
+          return { status: 403, jsonBody: { error: "Only managers can update order status" } };
+        }
       }
 
       const itemId = await workbookItemId();
