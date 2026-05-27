@@ -902,10 +902,31 @@ async function extractPDFText(pdfData) {
   return pages.join(" ").replace(/\s+/g, " ").trim();
 }
 
+// 2026-05-27 — drag-and-drop PDF onto the upload card. The dotted-line
+// area had "or drag and drop here" labelling forever but no listeners.
+document.addEventListener("DOMContentLoaded", () => {
+  const zone = document.querySelector(".upload-zone");
+  if (!zone) return;
+  const stop = (e) => { e.preventDefault(); e.stopPropagation(); };
+  ["dragenter","dragover","dragleave","drop"].forEach(ev => zone.addEventListener(ev, stop));
+  ["dragenter","dragover"].forEach(ev => zone.addEventListener(ev, () => zone.classList.add("drag-over")));
+  ["dragleave","drop"].forEach(ev => zone.addEventListener(ev, () => zone.classList.remove("drag-over")));
+  zone.addEventListener("drop", async (e) => {
+    const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (!file) return;
+    if (file.type !== "application/pdf" && !/\.pdf$/i.test(file.name)) {
+      alert("Please drop a PDF file.");
+      return;
+    }
+    // Reuse the existing handler with a synthetic input shape.
+    await handlePDFUpload({ files: [file], value: "" });
+  });
+});
+
 async function handlePDFUpload(input) {
   if (!input.files.length) return;
   const file = input.files[0];
-  input.value = "";
+  if ("value" in input && typeof input.value === "string") input.value = "";
   const prog = document.getElementById("progressArea");
   const bar = document.getElementById("progressBar");
   prog.style.display = "block";
@@ -925,6 +946,25 @@ async function handlePDFUpload(input) {
 }
 
 function parseFields(text, filename) {
+  // 2026-05-27 — pdf.js sometimes breaks long words and 4-digit
+  // numbers into space-separated fragments. The PDF for
+  // "Doors Open 2026" hit all three artifacts: "Contact" → "Contac t",
+  // "of" → "o f", "1700" → "1 7 00". This dropped endTime, numGuards
+  // and siteContact to fallbacks and bloated meetingLocation. Repair
+  // known split patterns before the regex pass runs.
+  text = text
+    .replace(/Number\s+o\s+f\s+/gi, "Number of ")
+    .replace(/Site\s+Contac\s+t/gi, "Site Contact")
+    .replace(/Hi\s*-\s*Visibility/gi, "Hi-Visibility")
+    // Collapse digit sequences that pdf.js broke up with stray spaces
+    // (times, counts). Lookbehind/lookahead require non-digit borders
+    // so real "1 hour 23 min"-style sequences are safe. Order matters
+    // — longer patterns first so 4-digit cases consume before 3-digit.
+    .replace(/(?<=\D)(\d)\s(\d)\s(\d)\s(\d)(?=\D)/g, "$1$2$3$4")
+    .replace(/(?<=\D)(\d)\s(\d)\s(\d\d)(?=\D)/g, "$1$2$3")   // "1 7 00"
+    .replace(/(?<=\D)(\d\d)\s(\d)\s(\d)(?=\D)/g, "$1$2$3")   // "17 0 0"
+    .replace(/(?<=\D)(\d)\s(\d)\s(\d)(?=\D)/g, "$1$2$3");
+
   // Strip checkbox bleed-over from two-column PDF table layout
   const cleanField = val => val.replace(/[☐☑☒][\s\S]*$/, '').trim();
 
