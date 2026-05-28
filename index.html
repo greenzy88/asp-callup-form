@@ -185,6 +185,45 @@
   </div>
 </div>
 
+<!-- 2026-05-28 — Admin "Manage Submitters" panel. Owner-only; survives
+     ADMIN_PIN_TEST=0 because revocation is a live operational need. -->
+<div id="manageSubmittersDialog" class="modal" tabindex="-1" style="z-index:10000;">
+  <div class="modal-dialog modal-dialog-centered modal-lg">
+    <div class="modal-content" style="border:none;border-radius:14px;box-shadow:0 16px 48px rgba(0,0,0,.3);">
+      <div class="modal-header" style="background:var(--asp-blue);color:#fff;border-radius:14px 14px 0 0;border:none;">
+        <div>
+          <h5 class="modal-title fw-bold mb-0">Manage Submitters</h5>
+          <div class="small mt-1" style="opacity:.85;">Reset PIN, revoke access, or remove a registered name.</div>
+        </div>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body p-3" style="max-height:70vh;overflow:auto;">
+        <div id="manageSubError" class="alert alert-danger small py-2 mb-2" style="display:none;"></div>
+        <div id="manageSubLoading" class="text-center py-4 text-muted">Loading...</div>
+        <div id="manageSubTableWrap" style="display:none;">
+          <table class="table table-sm table-hover mb-0">
+            <thead style="background:#f1f3f7;">
+              <tr style="font-size:.78rem;text-transform:uppercase;letter-spacing:.4px;color:#445;">
+                <th>Name</th>
+                <th>Parent</th>
+                <th>Last Seen</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="manageSubTbody"></tbody>
+          </table>
+          <div id="manageSubEmpty" class="text-muted small text-center py-3" style="display:none;">No submitters registered yet.</div>
+        </div>
+      </div>
+      <div class="modal-footer justify-content-between" style="border-top:1px solid #eee;background:#f8f9fa;">
+        <span class="text-muted small">Revoked users get a 403 on every protected endpoint immediately (60s revocation cache).</span>
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="_loadManageSubmitters()">&#x21BB; Refresh</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <nav class="navbar navbar-dark mb-4">
   <div class="container-fluid px-3 d-flex flex-column flex-md-row align-items-md-center gap-2 py-2">
     <div class="d-flex align-items-center flex-wrap gap-2">
@@ -195,6 +234,7 @@
     <span class="text-white-50 small d-none d-md-inline">Billy Bishop Toronto City Airport &ndash; BBTCA</span>
     <div class="ms-md-auto d-flex align-items-center gap-2 flex-wrap">
       <span class="user-badge" id="userBadge">Not signed in</span>
+      <button id="manageSubmittersBtn" class="btn btn-sm btn-light" onclick="showManageSubmitters()" style="display:none;">&#x1F465; Manage Submitters</button>
       <button id="signOutBtn" class="btn btn-sm btn-light" onclick="signOut()" style="display:none;">Sign Out</button>
     </div>
   </div>
@@ -586,6 +626,10 @@ function detectUserRole(username) {
   document.getElementById("statusPanel").style.display = isAuthenticated ? "block" : "none";
   const statusForm = document.getElementById("statusUpdateForm");
   if (statusForm) statusForm.style.display = isManager ? "block" : "none";
+  // Owner-only Manage Submitters button (always visible to admin, even
+  // after ADMIN_PIN_TEST is turned off — needed for live revocation).
+  const mgrBtn = document.getElementById("manageSubmittersBtn");
+  if (mgrBtn) mgrBtn.style.display = isAdmin ? "inline-block" : "none";
 }
 
 // ── Health banner controls (top-of-page yellow strip) ──
@@ -1553,6 +1597,107 @@ function _onSubmitterAuthed(res) {
 async function reauthSubmitter() {
   if (_submitterDialogResolve) return;  // already open
   await showSubmitterDialog();
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 2026-05-28 — Admin Manage Submitters panel.
+// ─────────────────────────────────────────────────────────────────────
+let _manageSubModal = null;
+
+function _formatLastSeen(iso) {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    if (!isFinite(d.getTime())) return iso;
+    const days = Math.floor((Date.now() - d.getTime()) / 86400000);
+    if (days === 0) return "today";
+    if (days === 1) return "yesterday";
+    if (days < 30) return `${days}d ago`;
+    return d.toLocaleDateString();
+  } catch (_) { return iso; }
+}
+
+function _renderManageSubmittersRow(s) {
+  const statusBadge = s.status === "revoked"
+    ? '<span class="badge bg-secondary">Revoked</span>'
+    : (s.has_pin ? '<span class="badge bg-success">Active</span>'
+                 : '<span class="badge bg-warning text-dark">No PIN yet</span>');
+  const parentShort = String(s.parent_account || "").split("@")[0];
+  const safeId = escAttr(s.submitter_id);
+  const safeName = escAttr(s.display_name);
+  // Action buttons depend on current status.
+  let actions = "";
+  if (s.status === "revoked") {
+    actions += `<button class="btn btn-sm btn-outline-success me-1" onclick="_handleSubmitterManage('${safeId}','restore','${safeName}')">Restore</button>`;
+  } else {
+    actions += `<button class="btn btn-sm btn-outline-warning me-1" onclick="_handleSubmitterManage('${safeId}','reset_pin','${safeName}')">Reset PIN</button>`;
+    actions += `<button class="btn btn-sm btn-outline-secondary me-1" onclick="_handleSubmitterManage('${safeId}','revoke','${safeName}')">Revoke</button>`;
+  }
+  actions += `<button class="btn btn-sm btn-outline-danger" onclick="_handleSubmitterManage('${safeId}','delete','${safeName}')">Delete</button>`;
+  return `
+    <tr>
+      <td class="fw-semibold">${escHtml(s.display_name)}</td>
+      <td><span class="text-muted small">${escHtml(parentShort)}</span></td>
+      <td class="small">${escHtml(_formatLastSeen(s.last_seen_at))}</td>
+      <td>${statusBadge}</td>
+      <td>${actions}</td>
+    </tr>`;
+}
+
+async function _loadManageSubmitters() {
+  const errEl = document.getElementById("manageSubError");
+  const loadEl = document.getElementById("manageSubLoading");
+  const wrapEl = document.getElementById("manageSubTableWrap");
+  const emptyEl = document.getElementById("manageSubEmpty");
+  const tbody = document.getElementById("manageSubTbody");
+  if (errEl) { errEl.style.display = "none"; errEl.textContent = ""; }
+  if (loadEl) loadEl.style.display = "block";
+  if (wrapEl) wrapEl.style.display = "none";
+  try {
+    const body = await apiJson("/submitters?admin=1");
+    const list = (body && body.submitters) || [];
+    if (loadEl) loadEl.style.display = "none";
+    if (wrapEl) wrapEl.style.display = "block";
+    if (!list.length) {
+      tbody.innerHTML = "";
+      if (emptyEl) emptyEl.style.display = "block";
+    } else {
+      if (emptyEl) emptyEl.style.display = "none";
+      tbody.innerHTML = list.map(_renderManageSubmittersRow).join("");
+    }
+  } catch (e) {
+    if (loadEl) loadEl.style.display = "none";
+    if (errEl) { errEl.textContent = "Couldn't load submitters: " + e.message; errEl.style.display = "block"; }
+  }
+}
+
+async function showManageSubmitters() {
+  if (!isAdmin) return;
+  const el = document.getElementById("manageSubmittersDialog");
+  if (!el) return;
+  if (!_manageSubModal) _manageSubModal = new bootstrap.Modal(el);
+  _manageSubModal.show();
+  await _loadManageSubmitters();
+}
+
+async function _handleSubmitterManage(submitterId, action, displayName) {
+  const labels = {
+    reset_pin: `Reset ${displayName}'s PIN? They'll set a new one on their next sign-in.`,
+    revoke:    `Revoke ${displayName}? They'll be blocked from all protected endpoints immediately.`,
+    restore:   `Restore ${displayName} to active status?`,
+    delete:    `PERMANENTLY DELETE ${displayName}'s submitter row?\n\nThe row is gone forever; the audit log entries remain.`,
+  };
+  if (!confirm(labels[action] || `${action} ${displayName}?`)) return;
+  try {
+    await apiJson(`/submitters/${encodeURIComponent(submitterId)}/manage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action }),
+    });
+    await _loadManageSubmitters();
+  } catch (e) {
+    alert("Action failed: " + e.message);
+  }
 }
 
 // Override the navbar badge text after page reload if a submitter is
