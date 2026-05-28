@@ -35,4 +35,12 @@ module.exports = {
     return v.trim();
   },
   tokenTableName: () => optional("TOKEN_TABLE_NAME", "OwnerTokens"),
+  // HMAC secret for X-Submitter-Token JWTs (HS256). At least 32 random bytes
+  // in production. Set via SWA app settings; throws clearly if missing so a
+  // misconfigured deploy doesn't silently issue tokens with an empty secret.
+  submitterTokenSecret: () => required("SUBMITTER_TOKEN_SECRET"),
+  // Optional TTL override for issued submitter tokens (default 12h = workday).
+  submitterTokenTtlSeconds: () => parseInt(optional("SUBMITTER_TOKEN_TTL_SECONDS", "43200"), 10),
+  // Set to "1" to make dramlagan@ see the Name+PIN dialog (temporary UX test).
+  adminPinTest: () => optional("ADMIN_PIN_TEST", "0") === "1",
 };

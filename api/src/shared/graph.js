@@ -276,8 +276,38 @@ async function writeSheet(itemId, sheetName, rows, headerOrder) {
   }
 }
 
+// Idempotently create a worksheet in the workbook. Returns true if the
+// sheet now exists (whether we created it or it already existed). Used by
+// modules that add new sheets (e.g., Submitters) so they don't have to
+// hardcode a pre-deploy step. Cheap when the sheet already exists (Graph
+// 409 on duplicate is caught and treated as success).
+async function ensureSheetExists(itemId, sheetName) {
+  try {
+    const r = await graphFetch(
+      `/me/drive/items/${itemId}/workbook/worksheets/add`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: sheetName }),
+      }
+    );
+    if (r.ok) return true;
+    // Graph returns 400 InvalidArgument when the sheet name already exists.
+    // Treat that as success; surface anything else.
+    const txt = await r.text();
+    if (txt && txt.toLowerCase().includes("already exist")) return true;
+    if (r.status === 400) return true;  // most "already exists" variants land here
+    throw new Error(`ensureSheetExists ${sheetName} failed: ${r.status} ${txt.slice(0, 200)}`);
+  } catch (e) {
+    // If the error message itself tells us the sheet exists, that's fine.
+    if (String(e.message || "").toLowerCase().includes("already exist")) return true;
+    throw e;
+  }
+}
+
 module.exports = {
   getOwnerAccessToken, graphFetch, graphJson, workbookItemId,
   readSheet, writeSheet, ORDERS_HEADERS, HISTORY_HEADERS,
   snapshotSheet, pruneSnapshots, antiWipeOrThrow,
+  ensureSheetExists,
 };
