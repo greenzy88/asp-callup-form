@@ -4,6 +4,7 @@
 const { app } = require("@azure/functions");
 const { requireUser } = require("../shared/auth");
 const { canManageStatus, canEdit } = require("../shared/roles");
+const { requireSubmitterIfClient, auditLabel } = require("../shared/submitters");
 const {
   readSheet, writeSheet, workbookItemId,
   ORDERS_HEADERS, HISTORY_HEADERS,
@@ -16,7 +17,9 @@ app.http("orderUpdate", {
   authLevel: "anonymous",
   handler: async (req, ctx) => {
     try {
-      const { upn } = await requireUser(req);
+      const { upn, role } = await requireUser(req);
+      const submitter = await requireSubmitterIfClient(req, { upn, role });
+      const actor = auditLabel(upn, submitter);
       const orderId = req.params.orderId;
       const body = await req.json().catch(() => ({}));
       const fields = (body && body.fields) || {};
@@ -51,7 +54,7 @@ app.http("orderUpdate", {
       const before = orderRows[idx];
       const after = Object.assign({}, before, fields, {
         OrderID: before.OrderID,
-        UpdatedBy: upn,
+        UpdatedBy: actor,
         LastUpdated: ts.toLocaleString(),
       });
       orderRows[idx] = after;
@@ -89,7 +92,7 @@ app.http("orderUpdate", {
           Status: statusChange
             ? statusChange.to
             : (nonStatusChanges.length ? "Edited" : before.Status),
-          ChangedBy: upn,
+          ChangedBy: actor,
           Timestamp: ts.toLocaleString(),
           Notes: noteParts.join(" | "),
         });

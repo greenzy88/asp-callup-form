@@ -4,6 +4,7 @@
 const { app } = require("@azure/functions");
 const { requireUser } = require("../shared/auth");
 const { canEdit } = require("../shared/roles");
+const { requireSubmitterIfClient, auditLabel } = require("../shared/submitters");
 const {
   readSheet, writeSheet, workbookItemId,
   ORDERS_HEADERS, HISTORY_HEADERS,
@@ -16,10 +17,12 @@ app.http("ordersAdd", {
   authLevel: "anonymous",
   handler: async (req, ctx) => {
     try {
-      const { upn } = await requireUser(req);
+      const { upn, role } = await requireUser(req);
       if (!canEdit(upn)) {
         return { status: 403, jsonBody: { error: "Not authorised to create orders" } };
       }
+      const submitter = await requireSubmitterIfClient(req, { upn, role });
+      const actor = auditLabel(upn, submitter);
       const body = await req.json();
       if (!body || !body.order || typeof body.order !== "object") {
         return { status: 400, jsonBody: { error: "Body must contain `order` object" } };
@@ -40,7 +43,7 @@ app.http("ordersAdd", {
         {
           OrderID: newId,
           Status: "Pending",
-          UpdatedBy: `${upn} (PDF Upload)`,
+          UpdatedBy: `${actor} (PDF Upload)`,
           LastUpdated: ts.toLocaleString(),
           Archived: "No",
         },
@@ -51,7 +54,7 @@ app.http("ordersAdd", {
       histRows.push({
         OrderID: newId,
         Status: order.Status,
-        ChangedBy: `${upn} (PDF Upload)`,
+        ChangedBy: `${actor} (PDF Upload)`,
         Timestamp: ts.toLocaleString(),
         Notes: body.historyNote || "Order created from PDF upload",
       });

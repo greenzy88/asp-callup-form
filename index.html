@@ -331,7 +331,15 @@ const USER_DISPLAY_NAMES = {
   "atraining@security-asp.com": "Client"
 };
 function displayName(upn) {
-  return USER_DISPLAY_NAMES[String(upn || "").toLowerCase()] || upn || "Unknown";
+  const u = String(upn || "").toLowerCase();
+  // 2026-05-28 — when the current user has completed the Submitter
+  // Name+PIN dialog, prefer their human-readable display_name over the
+  // generic "Client" / "Admin" UPN mapping. Limited to the active session
+  // (so other people's UPNs in StatusHistory still resolve normally).
+  if (submitterDisplayName && u === String(currentUserUpn || "").toLowerCase()) {
+    return submitterDisplayName;
+  }
+  return USER_DISPLAY_NAMES[u] || upn || "Unknown";
 }
 
 function escAttr(s) {
@@ -552,6 +560,8 @@ async function apiJson(path, init) {
 }
 
 function signOut() {
+  // Clear the cached submitter so the next sign-in re-prompts for PIN.
+  clearSubmitter();
   msalInstance.logoutPopup();
 }
 

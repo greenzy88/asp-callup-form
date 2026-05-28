@@ -4,6 +4,7 @@
 const { app } = require("@azure/functions");
 const { requireUser } = require("../shared/auth");
 const { canEdit } = require("../shared/roles");
+const { requireSubmitterIfClient } = require("../shared/submitters");
 const { graphFetch } = require("../shared/graph");
 
 app.http("email", {
@@ -12,10 +13,12 @@ app.http("email", {
   authLevel: "anonymous",
   handler: async (req, ctx) => {
     try {
-      const { upn } = await requireUser(req);
+      const { upn, role } = await requireUser(req);
       if (!canEdit(upn)) {
         return { status: 403, jsonBody: { error: "Not authorised to send mail" } };
       }
+      // Require submitter token from clients (and admin in ADMIN_PIN_TEST).
+      await requireSubmitterIfClient(req, { upn, role });
       const body = await req.json();
       const to = body && body.to;
       const subject = body && body.subject;

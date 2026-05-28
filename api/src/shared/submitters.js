@@ -373,6 +373,27 @@ async function requireSubmitterToken(req, expectedParentAccount) {
   return { submitter_id: submitterId, display_name: displayName, parent_account: parentAccount };
 }
 
+// Endpoint-level gate that decides whether the caller's role requires
+// a verified submitter token. Clients always do; owner does only when
+// ADMIN_PIN_TEST=1 (so David can exercise the flow). Managers (Pat /
+// Farhad) never do — their UPN identifies them. Returns the verified
+// submitter info on success, or null when no token is required.
+async function requireSubmitterIfClient(req, userInfo) {
+  const role = (userInfo && userInfo.role) || "";
+  const upn = (userInfo && userInfo.upn) || "";
+  const needsToken = role === "client" || (role === "owner" && config.adminPinTest());
+  if (!needsToken) return null;
+  return await requireSubmitterToken(req, upn);
+}
+
+// Build the audit string used in UpdatedBy / ChangedBy. When a submitter
+// is verified, surface their display_name alongside the UPN so the trail
+// is human-readable AND traceable to a M365 sign-in (forensics).
+function auditLabel(upn, submitter) {
+  if (!submitter || !submitter.display_name) return String(upn || "");
+  return `${submitter.display_name} (via ${upn})`;
+}
+
 module.exports = {
   SUBMITTERS_HEADERS,
   listForParent,
@@ -384,4 +405,6 @@ module.exports = {
   verifyPin,
   adminAction,
   requireSubmitterToken,
+  requireSubmitterIfClient,
+  auditLabel,
 };
