@@ -101,6 +101,90 @@
   </div>
 </div>
 
+<!-- 2026-05-28 — Submitter identity dialog. Shown after MSAL login for
+     atraining@ (always) and for dramlagan@ when ADMIN_PIN_TEST=1. The
+     SPA can't be dismissed until a submitter token is in hand.
+     Three sub-views toggle via class display:
+       #subDlgView_pick      — dropdown of registered names + Register new
+       #subDlgView_setpin    — pre-seeded name choosing first PIN
+       #subDlgView_register  — brand-new airport-planning self-register
+-->
+<div id="submitterDialog" class="modal" tabindex="-1"
+     data-bs-backdrop="static" data-bs-keyboard="false"
+     style="z-index:10000;">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content" style="border:none;border-radius:14px;box-shadow:0 16px 48px rgba(0,0,0,.3);">
+      <div class="modal-header" style="background:var(--asp-blue);color:#fff;border-radius:14px 14px 0 0;border:none;">
+        <div>
+          <h5 class="modal-title fw-bold mb-0">Welcome to the BBTCA Call-Up Form</h5>
+          <div class="small mt-1" style="opacity:.85;">Pick your name and enter your PIN</div>
+        </div>
+      </div>
+      <div class="modal-body p-4">
+        <div id="subDlgError" class="alert alert-danger small py-2 mb-3" style="display:none;"></div>
+
+        <!-- View 1: pick a name from the dropdown OR Register new -->
+        <div id="subDlgView_pick">
+          <label class="form-label small fw-semibold" for="subDlgPickName" style="color:var(--asp-blue);">Your name</label>
+          <select id="subDlgPickName" class="form-select mb-3">
+            <option value="">— Choose your name —</option>
+          </select>
+          <div id="subDlgPickPinWrap" style="display:none;">
+            <label class="form-label small fw-semibold" for="subDlgPickPin" style="color:var(--asp-blue);">4-digit PIN</label>
+            <input type="password" inputmode="numeric" pattern="\d{4}" maxlength="4"
+                   id="subDlgPickPin" class="form-control mb-3" autocomplete="off"
+                   placeholder="••••" style="letter-spacing:.4em;font-size:1.2rem;text-align:center;">
+            <button class="btn w-100 mb-2" style="background:var(--asp-blue);color:#fff;"
+                    id="subDlgPickContinue" onclick="submitterDialogContinue()">Continue</button>
+          </div>
+          <div class="text-center my-3 text-muted small">— or —</div>
+          <button class="btn btn-outline-secondary w-100" onclick="submitterDialogShowRegister()">
+            &#x2795; Register a new name
+          </button>
+        </div>
+
+        <!-- View 2: set-initial-PIN for a pre-seeded name -->
+        <div id="subDlgView_setpin" style="display:none;">
+          <p class="small mb-3">Welcome, <span id="subDlgSetPinName" class="fw-bold"></span>! It looks like this is your first time signing in. Please set a 4-digit PIN you'll use from now on.</p>
+          <label class="form-label small fw-semibold" for="subDlgSetPin1" style="color:var(--asp-blue);">Choose a 4-digit PIN</label>
+          <input type="password" inputmode="numeric" pattern="\d{4}" maxlength="4"
+                 id="subDlgSetPin1" class="form-control mb-3" autocomplete="off"
+                 placeholder="••••" style="letter-spacing:.4em;font-size:1.2rem;text-align:center;">
+          <label class="form-label small fw-semibold" for="subDlgSetPin2" style="color:var(--asp-blue);">Confirm PIN</label>
+          <input type="password" inputmode="numeric" pattern="\d{4}" maxlength="4"
+                 id="subDlgSetPin2" class="form-control mb-3" autocomplete="off"
+                 placeholder="••••" style="letter-spacing:.4em;font-size:1.2rem;text-align:center;">
+          <button class="btn w-100 mb-2" style="background:var(--asp-blue);color:#fff;"
+                  onclick="submitterDialogSetInitial()">Set PIN &amp; Continue</button>
+          <button class="btn btn-link w-100 small" onclick="submitterDialogShowPick()">&#x2190; Back</button>
+        </div>
+
+        <!-- View 3: register a brand-new submitter (name + PIN) -->
+        <div id="subDlgView_register" style="display:none;">
+          <p class="small mb-3">Register your name so the BBTCA team knows who's submitting requests. Pick a 4-digit PIN you'll remember.</p>
+          <label class="form-label small fw-semibold" for="subDlgRegName" style="color:var(--asp-blue);">Your full name</label>
+          <input type="text" id="subDlgRegName" class="form-control mb-3" autocomplete="off"
+                 maxlength="60" placeholder="e.g., Tom Smith">
+          <label class="form-label small fw-semibold" for="subDlgRegPin1" style="color:var(--asp-blue);">Choose a 4-digit PIN</label>
+          <input type="password" inputmode="numeric" pattern="\d{4}" maxlength="4"
+                 id="subDlgRegPin1" class="form-control mb-3" autocomplete="off"
+                 placeholder="••••" style="letter-spacing:.4em;font-size:1.2rem;text-align:center;">
+          <label class="form-label small fw-semibold" for="subDlgRegPin2" style="color:var(--asp-blue);">Confirm PIN</label>
+          <input type="password" inputmode="numeric" pattern="\d{4}" maxlength="4"
+                 id="subDlgRegPin2" class="form-control mb-3" autocomplete="off"
+                 placeholder="••••" style="letter-spacing:.4em;font-size:1.2rem;text-align:center;">
+          <button class="btn w-100 mb-2" style="background:var(--asp-blue);color:#fff;"
+                  onclick="submitterDialogRegister()">Register &amp; Continue</button>
+          <button class="btn btn-link w-100 small" onclick="submitterDialogShowPick()">&#x2190; Back</button>
+        </div>
+      </div>
+      <div class="modal-footer justify-content-center" style="border:none;background:#f8f9fa;border-radius:0 0 14px 14px;">
+        <span class="text-muted small">Your PIN identifies you for the audit log.</span>
+      </div>
+    </div>
+  </div>
+</div>
+
 <nav class="navbar navbar-dark mb-4">
   <div class="container-fluid px-3 d-flex flex-column flex-md-row align-items-md-center gap-2 py-2">
     <div class="d-flex align-items-center flex-wrap gap-2">
@@ -302,6 +386,32 @@ let currentUserUpn = "";
 let orders = [], statusHistory = [], selectedId = null, isManager = false, isAdmin = false;
 let isEditingFields = false;
 
+// 2026-05-28 — Submitter identity layer (Name+PIN dialog after MSAL).
+// Token persists in localStorage so users don't re-enter their PIN on
+// every page load; the SPA only re-prompts when the token is rejected
+// (expired / revoked / parent mismatch).
+const SUBMITTER_LS_KEY = "bbtca_submitter_v1";
+function loadSubmitterFromStorage() {
+  try {
+    const raw = localStorage.getItem(SUBMITTER_LS_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch (_) { return null; }
+}
+function persistSubmitter(obj) {
+  try { localStorage.setItem(SUBMITTER_LS_KEY, JSON.stringify(obj)); } catch (_) {}
+}
+function clearSubmitter() {
+  try { localStorage.removeItem(SUBMITTER_LS_KEY); } catch (_) {}
+  submitterToken = null; submitterDisplayName = ""; submitterId = "";
+}
+let _persisted = loadSubmitterFromStorage();
+let submitterToken = (_persisted && _persisted.token) || null;
+let submitterDisplayName = (_persisted && _persisted.display_name) || "";
+let submitterId = (_persisted && _persisted.submitter_id) || "";
+let _submitterDialogInstance = null;
+let _submitterDialogList = [];
+
 try {
   msalInstance = new msal.PublicClientApplication(msalConfig);
 } catch(e) {
@@ -338,6 +448,22 @@ function loginPopup() {
     document.getElementById("appContent").style.display = "block";
     document.getElementById("signOutBtn").style.display = "block";
     detectUserRole(currentUserUpn);
+    // 2026-05-28 — Name+PIN gate. /api/me returns whether this account
+    // needs the Submitter dialog (clients always, dramlagan@ only when
+    // ADMIN_PIN_TEST=1). If yes and no cached token, block app content
+    // behind the modal until they identify themselves.
+    try {
+      const meBody = await apiJson("/me");
+      if (meBody && meBody.submitter_dialog_required && !submitterToken) {
+        await showSubmitterDialog();
+      } else if (meBody && submitterDisplayName) {
+        // Refresh the badge so it shows the cached display_name.
+        const badge = document.getElementById("userBadge");
+        if (badge) badge.textContent = submitterDisplayName;
+      }
+    } catch (e) {
+      console.warn("/api/me check failed:", e);
+    }
     showLoading("Loading orders...");
     await loadDataFromExcel();
     hideLoading();
@@ -385,10 +511,30 @@ async function apiFetch(path, init) {
   // an internal service token before forwarding to /api/*. We send the
   // MSAL ID token in a custom header that SWA forwards untouched.
   const opts = Object.assign({}, init || {});
-  opts.headers = Object.assign({}, (init && init.headers) || {}, {
-    "X-User-Token": idToken,
-  });
+  // 2026-05-28 — also forward X-Submitter-Token when the user has
+  // completed the Name+PIN dialog. The backend rejects writes from
+  // dialog-required accounts without this header.
+  const _hdrs = { "X-User-Token": idToken };
+  if (submitterToken) _hdrs["X-Submitter-Token"] = submitterToken;
+  opts.headers = Object.assign({}, (init && init.headers) || {}, _hdrs);
   const r = await fetch(`/api${path}`, opts);
+  // If the submitter token was rejected (expired / revoked / parent
+  // mismatch), clear it and re-prompt. We clone the response so the
+  // caller can still read the body.
+  if (r.status === 401 || r.status === 403) {
+    try {
+      const clone = r.clone();
+      const ct = (clone.headers.get("content-type") || "").toLowerCase();
+      if (ct.includes("json")) {
+        const body = await clone.json();
+        const rejectCodes = new Set(["MISSING_SUBMITTER_TOKEN","BAD_SUBMITTER_TOKEN","REVOKED","SUBMITTER_GONE","PARENT_MISMATCH"]);
+        if (body && rejectCodes.has(body.code)) {
+          clearSubmitter();
+          showSubmitterDialog().catch(() => {});
+        }
+      }
+    } catch (_) {}
+  }
   return r;
 }
 async function apiJson(path, init) {
@@ -418,6 +564,12 @@ function detectUserRole(username) {
   const isAuthenticated = isManager || clientSet.has(upn);
   document.getElementById("userBadge").textContent = displayName(username);
   document.getElementById("userBadge").title = username;
+  // If a Submitter is already cached in localStorage, prefer their
+  // display_name over the generic "Client" / "Admin" UPN mapping.
+  if (submitterDisplayName) {
+    document.getElementById("userBadge").textContent = submitterDisplayName;
+    document.getElementById("userBadge").title = submitterDisplayName + " (via " + username + ")";
+  }
   // Upload + status panel (with history) visible to ALL authenticated users.
   // The status-update form within statusPanel is gated separately below.
   document.getElementById("uploadCard").style.display = isAuthenticated ? "block" : "none";
@@ -1210,6 +1362,200 @@ async function addExtractedOrder() {
 
 function cancelExtracted() {
   document.getElementById("extractedCard").style.display = "none";
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 2026-05-28 — Submitter (Name+PIN) dialog handlers.
+// ─────────────────────────────────────────────────────────────────────
+let _submitterDialogResolve = null;
+
+function _subErr(msg) {
+  const e = document.getElementById("subDlgError");
+  if (!e) return;
+  if (msg) { e.textContent = msg; e.style.display = "block"; }
+  else { e.textContent = ""; e.style.display = "none"; }
+}
+
+function _subShowOnly(viewId) {
+  for (const v of ["subDlgView_pick", "subDlgView_setpin", "subDlgView_register"]) {
+    const el = document.getElementById(v);
+    if (el) el.style.display = (v === viewId) ? "block" : "none";
+  }
+  _subErr("");
+}
+
+function submitterDialogShowPick()     { _subShowOnly("subDlgView_pick"); }
+function submitterDialogShowRegister() {
+  _subShowOnly("subDlgView_register");
+  setTimeout(() => { const el = document.getElementById("subDlgRegName"); if (el) el.focus(); }, 50);
+}
+
+async function _loadSubmitterList() {
+  const body = await apiJson("/submitters");
+  _submitterDialogList = (body && body.submitters) || [];
+  const sel = document.getElementById("subDlgPickName");
+  if (!sel) return;
+  // Reset to placeholder + active rows. Revoked rows are already filtered
+  // out by the backend's listForParent.
+  const opts = ['<option value="">— Choose your name —</option>'];
+  for (const s of _submitterDialogList) {
+    opts.push(`<option value="${escAttr(s.submitter_id)}">${escHtml(s.display_name)}${s.has_pin ? "" : " (set PIN)"}</option>`);
+  }
+  sel.innerHTML = opts.join("");
+  // Re-bind change listener — when user picks a row, decide whether to
+  // show the PIN entry (returning) or switch to set-initial-pin view.
+  sel.onchange = () => {
+    _subErr("");
+    const id = sel.value;
+    const row = _submitterDialogList.find(r => r.submitter_id === id);
+    const pinWrap = document.getElementById("subDlgPickPinWrap");
+    if (!row) { pinWrap.style.display = "none"; return; }
+    if (row.has_pin) {
+      pinWrap.style.display = "block";
+      const inp = document.getElementById("subDlgPickPin");
+      if (inp) { inp.value = ""; setTimeout(() => inp.focus(), 50); }
+    } else {
+      pinWrap.style.display = "none";
+      const nameEl = document.getElementById("subDlgSetPinName");
+      if (nameEl) nameEl.textContent = row.display_name;
+      _subShowOnly("subDlgView_setpin");
+      const inp = document.getElementById("subDlgSetPin1");
+      if (inp) { inp.value = ""; setTimeout(() => inp.focus(), 50); }
+      const inp2 = document.getElementById("subDlgSetPin2");
+      if (inp2) inp2.value = "";
+    }
+  };
+  // Hide PIN until a name is chosen.
+  const pinWrap = document.getElementById("subDlgPickPinWrap");
+  if (pinWrap) pinWrap.style.display = "none";
+}
+
+async function showSubmitterDialog() {
+  // Idempotent — if a modal is already open, just rebind state.
+  await _loadSubmitterList().catch((e) => { _subErr("Couldn't load submitter list: " + e.message); });
+  _subShowOnly("subDlgView_pick");
+  const modalEl = document.getElementById("submitterDialog");
+  if (!modalEl) return;
+  if (!_submitterDialogInstance) {
+    _submitterDialogInstance = new bootstrap.Modal(modalEl, { backdrop: "static", keyboard: false });
+    // Enter-key shortcuts on the three PIN inputs.
+    document.getElementById("subDlgPickPin").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); submitterDialogContinue(); }
+    });
+    document.getElementById("subDlgSetPin2").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); submitterDialogSetInitial(); }
+    });
+    document.getElementById("subDlgRegPin2").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); submitterDialogRegister(); }
+    });
+  }
+  _submitterDialogInstance.show();
+  return new Promise((resolve) => { _submitterDialogResolve = resolve; });
+}
+
+function _hideSubmitterDialog() {
+  if (_submitterDialogInstance) _submitterDialogInstance.hide();
+  if (_submitterDialogResolve) { _submitterDialogResolve(); _submitterDialogResolve = null; }
+}
+
+function _validPin(s) { return typeof s === "string" && /^\d{4}$/.test(s); }
+
+async function submitterDialogContinue() {
+  _subErr("");
+  const id = document.getElementById("subDlgPickName").value;
+  const pin = document.getElementById("subDlgPickPin").value;
+  if (!id) { _subErr("Please pick your name from the dropdown."); return; }
+  if (!_validPin(pin)) { _subErr("PIN must be exactly 4 digits."); return; }
+  try {
+    const res = await apiJson("/submitters/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ submitter_id: id, pin }),
+    });
+    _onSubmitterAuthed(res);
+  } catch (e) {
+    if (e.body && e.body.code === "BAD_PIN") _subErr("PIN incorrect. Try again.");
+    else if (e.body && e.body.code === "REVOKED") _subErr("This name has been revoked by the administrator.");
+    else if (e.body && e.body.code === "PIN_NOT_SET") _subErr("This name has no PIN yet. Re-pick it to set one.");
+    else _subErr(e.message || "Verify failed.");
+  }
+}
+
+async function submitterDialogSetInitial() {
+  _subErr("");
+  const id = document.getElementById("subDlgPickName").value;
+  const p1 = document.getElementById("subDlgSetPin1").value;
+  const p2 = document.getElementById("subDlgSetPin2").value;
+  if (!id) { _subErr("Pick your name first."); _subShowOnly("subDlgView_pick"); return; }
+  if (!_validPin(p1)) { _subErr("PIN must be exactly 4 digits."); return; }
+  if (p1 !== p2) { _subErr("PINs don't match. Re-enter both."); return; }
+  try {
+    const res = await apiJson("/submitters/set-initial-pin", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ submitter_id: id, pin: p1 }),
+    });
+    _onSubmitterAuthed(res);
+  } catch (e) {
+    if (e.body && e.body.code === "ALREADY_SET") _subErr("A PIN was already set for this name. Go back and enter your existing PIN.");
+    else _subErr(e.message || "Set PIN failed.");
+  }
+}
+
+async function submitterDialogRegister() {
+  _subErr("");
+  const name = (document.getElementById("subDlgRegName").value || "").trim();
+  const p1 = document.getElementById("subDlgRegPin1").value;
+  const p2 = document.getElementById("subDlgRegPin2").value;
+  if (name.length < 2) { _subErr("Enter your full name (at least 2 characters)."); return; }
+  if (!_validPin(p1)) { _subErr("PIN must be exactly 4 digits."); return; }
+  if (p1 !== p2) { _subErr("PINs don't match. Re-enter both."); return; }
+  try {
+    const res = await apiJson("/submitters/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ display_name: name, pin: p1 }),
+    });
+    _onSubmitterAuthed(res);
+  } catch (e) {
+    if (e.body && e.body.code === "NAME_TAKEN") _subErr("That name is already registered. Go back and pick it from the dropdown.");
+    else _subErr(e.message || "Register failed.");
+  }
+}
+
+function _onSubmitterAuthed(res) {
+  if (!res || !res.token || !res.row) return;
+  submitterToken = res.token;
+  submitterDisplayName = res.row.display_name;
+  submitterId = res.row.submitter_id;
+  persistSubmitter({
+    token: submitterToken,
+    display_name: submitterDisplayName,
+    submitter_id: submitterId,
+  });
+  // Update the navbar badge so the user sees their identity stuck.
+  const badge = document.getElementById("userBadge");
+  if (badge) { badge.textContent = submitterDisplayName; badge.title = submitterDisplayName + " (via " + currentUserUpn + ")"; }
+  _hideSubmitterDialog();
+}
+
+// Public entry to re-prompt (used by apiFetch on REVOKED / token error).
+async function reauthSubmitter() {
+  if (_submitterDialogResolve) return;  // already open
+  await showSubmitterDialog();
+}
+
+// Override the navbar badge text after page reload if a submitter is
+// already in localStorage. detectUserRole sets it to "Client" / "Admin"
+// based on UPN; we overwrite to the cached display_name so returning
+// users see their name without re-prompting.
+function _applyCachedSubmitterBadge() {
+  if (!submitterDisplayName) return;
+  const badge = document.getElementById("userBadge");
+  if (badge && badge.textContent && badge.textContent !== "Not signed in") {
+    badge.textContent = submitterDisplayName;
+    badge.title = submitterDisplayName + " (via " + currentUserUpn + ")";
+  }
 }
 
 console.log("ASP Temporary Post Order System ready — Sign in to continue");
