@@ -39,9 +39,7 @@ const SUBMITTERS_HEADERS = [
 // Pre-seed rows created on first read of the Submitters sheet. PINs are
 // blank — user sets their own on first login.
 const PRE_SEED = [
-  { DisplayName: "Holly Campbell",  ParentAccount: "atraining@security-asp.com" },
-  { DisplayName: "Denise Roy",      ParentAccount: "atraining@security-asp.com" },
-  { DisplayName: "Chad Martin",     ParentAccount: "atraining@security-asp.com" },
+  // David 2026-05-28: emptied — "let them decide just like the way I got in."
 ];
 
 // 60s revocation-cache to spare OneDrive Graph IO on every protected call.

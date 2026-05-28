@@ -178,8 +178,12 @@
           <button class="btn btn-link w-100 small" onclick="submitterDialogShowPick()">&#x2190; Back</button>
         </div>
       </div>
-      <div class="modal-footer justify-content-center" style="border:none;background:#f8f9fa;border-radius:0 0 14px 14px;">
-        <span class="text-muted small">Your PIN identifies you for the audit log.</span>
+      <div class="modal-footer flex-column align-items-center text-center" style="border:none;background:#f8f9fa;border-radius:0 0 14px 14px;gap:.25rem;">
+        <div class="form-check small mb-0">
+          <input class="form-check-input" type="checkbox" id="subDlgRemember">
+          <label class="form-check-label" for="subDlgRemember">Stay signed in on this device (up to 12 h)</label>
+        </div>
+        <span class="text-muted" style="font-size:.72rem;">Your PIN identifies you for the audit log.</span>
       </div>
     </div>
   </div>
@@ -440,17 +444,26 @@ let isEditingFields = false;
 // (expired / revoked / parent mismatch).
 const SUBMITTER_LS_KEY = "bbtca_submitter_v1";
 function loadSubmitterFromStorage() {
+  // 2026-05-28 — sticky cache lives in localStorage (12h, survives close);
+  // per-session lives in sessionStorage (wiped on close). Sticky wins on read.
   try {
-    const raw = localStorage.getItem(SUBMITTER_LS_KEY);
+    let raw = localStorage.getItem(SUBMITTER_LS_KEY);
+    if (!raw) raw = sessionStorage.getItem(SUBMITTER_LS_KEY);
     if (!raw) return null;
     return JSON.parse(raw);
   } catch (_) { return null; }
 }
-function persistSubmitter(obj) {
-  try { localStorage.setItem(SUBMITTER_LS_KEY, JSON.stringify(obj)); } catch (_) {}
+function persistSubmitter(obj, sticky) {
+  try {
+    const store = sticky ? localStorage : sessionStorage;
+    const other = sticky ? sessionStorage : localStorage;
+    store.setItem(SUBMITTER_LS_KEY, JSON.stringify(obj));
+    other.removeItem(SUBMITTER_LS_KEY);
+  } catch (_) {}
 }
 function clearSubmitter() {
   try { localStorage.removeItem(SUBMITTER_LS_KEY); } catch (_) {}
+  try { sessionStorage.removeItem(SUBMITTER_LS_KEY); } catch (_) {}
   submitterToken = null; submitterDisplayName = ""; submitterId = "";
 }
 let _persisted = loadSubmitterFromStorage();
@@ -1582,11 +1595,13 @@ function _onSubmitterAuthed(res) {
   submitterToken = res.token;
   submitterDisplayName = res.row.display_name;
   submitterId = res.row.submitter_id;
+  const rememberEl = document.getElementById("subDlgRemember");
+  const sticky = !!(rememberEl && rememberEl.checked);
   persistSubmitter({
     token: submitterToken,
     display_name: submitterDisplayName,
     submitter_id: submitterId,
-  });
+  }, sticky);
   // Update the navbar badge so the user sees their identity stuck.
   const badge = document.getElementById("userBadge");
   if (badge) { badge.textContent = submitterDisplayName; badge.title = submitterDisplayName + " (via " + currentUserUpn + ")"; }
