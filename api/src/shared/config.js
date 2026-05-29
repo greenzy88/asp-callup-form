@@ -43,4 +43,9 @@ module.exports = {
   submitterTokenTtlSeconds: () => parseInt(optional("SUBMITTER_TOKEN_TTL_SECONDS", "43200"), 10),
   // Set to "1" to make dramlagan@ see the Name+PIN dialog (temporary UX test).
   adminPinTest: () => optional("ADMIN_PIN_TEST", "0") === "1",
+  // Display name shown in the recipient's mail client for outgoing
+  // notification emails. The underlying address stays the authenticated
+  // owner (David), but the name field masks it visually. Configurable
+  // via SWA app setting so wording tweaks don't need a code push.
+  senderDisplayName: () => optional("SENDER_DISPLAY_NAME", "ASP Call-Up Notifications (Do Not Reply)"),
 };

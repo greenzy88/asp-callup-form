@@ -6,6 +6,7 @@ const { requireUser } = require("../shared/auth");
 const { canEdit } = require("../shared/roles");
 const { requireSubmitterIfClient } = require("../shared/submitters");
 const { graphFetch } = require("../shared/graph");
+const config = require("../shared/config");
 
 app.http("email", {
   route: "email",
@@ -60,10 +61,21 @@ app.http("email", {
         }
       }
 
+      // 2026-05-28 — visual sender mask. The underlying address stays the
+      // authenticated owner (Graph sendMail requires from.address == auth
+      // user OR a SendAs-permitted address). We override the display name
+      // so recipients see e.g. "ASP Call-Up Notifications (Do Not Reply)"
+      // in the From field instead of "David Ramlagan".
       const payload = {
         message: {
           subject: String(subject),
           body: { contentType: "HTML", content: String(html) },
+          from: {
+            emailAddress: {
+              name: config.senderDisplayName(),
+              address: config.ownerUpn(),
+            },
+          },
           toRecipients: (Array.isArray(to) ? to : [to]).map((addr) => ({
             emailAddress: { address: String(addr) },
           })),
