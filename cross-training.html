@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ASP Security — Cross Training Sign-Up</title>
+<style>
+  :root {
+    --red:   #C8102E;
+    --red-dk:#a50d24;
+    --black: #1A1A1A;
+    --gray:  #f5f5f5;
+    --border:#ddd;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #e8e8e8;
+    color: var(--black);
+    min-height: 100vh;
+  }
+
+  .site-header {
+    background: var(--red);
+    color: #fff;
+    text-align: center;
+    padding: 28px 20px 24px;
+  }
+  .site-header .logo-mark {
+    display: inline-block;
+    background: #fff;
+    color: var(--red);
+    font-size: 2rem;
+    font-weight: 900;
+    letter-spacing: 4px;
+    padding: 6px 18px;
+    border-radius: 4px;
+    margin-bottom: 12px;
+  }
+  .site-header h1 {
+    font-size: 1.35rem;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+  .site-header p {
+    font-size: 0.88rem;
+    opacity: 0.85;
+    margin-top: 4px;
+  }
+
+  .card {
+    background: #fff;
+    max-width: 700px;
+    margin: 28px auto;
+    border-radius: 6px;
+    box-shadow: 0 2px 12px rgba(0,0,0,.12);
+    overflow: hidden;
+  }
+  .card-body { padding: 28px 28px 32px; }
+  @media (max-width: 500px) { .card-body { padding: 18px 16px 24px; } }
+
+  .section-title {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--red);
+    margin: 28px 0 12px;
+    padding-bottom: 6px;
+    border-bottom: 2px solid var(--red);
+  }
+  .section-title:first-child { margin-top: 0; }
+
+  .field + .field { margin-top: 16px; }
+  label.field-label {
+    display: block;
+    font-size: 0.82rem;
+    font-weight: 600;
+    margin-bottom: 5px;
+    color: #333;
+  }
+  label.field-label .req { color: var(--red); margin-left: 2px; }
+  input[type=text] {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1.5px solid var(--border);
+    border-radius: 4px;
+    font-size: 0.95rem;
+    outline: none;
+    transition: border-color .15s;
+  }
+  input[type=text]:focus { border-color: var(--red); }
+
+  .checkbox-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 16px;
+  }
+  @media (max-width: 420px) { .checkbox-grid { grid-template-columns: 1fr; } }
+  .check-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    font-size: 0.92rem;
+    padding: 8px 10px;
+    border-radius: 4px;
+    border: 1.5px solid var(--border);
+    transition: border-color .15s, background .15s;
+    user-select: none;
+  }
+  .check-item:hover { border-color: var(--red); }
+  .check-item input[type=checkbox] { display: none; }
+  .check-item.selected {
+    border-color: var(--red);
+    background: #fff0f2;
+    font-weight: 600;
+  }
+  .check-box {
+    width: 18px; height: 18px; flex-shrink: 0;
+    border: 2px solid var(--border);
+    border-radius: 3px;
+    display: flex; align-items: center; justify-content: center;
+    transition: border-color .15s, background .15s;
+  }
+  .check-item.selected .check-box {
+    background: var(--red);
+    border-color: var(--red);
+  }
+  .check-mark {
+    display: none;
+    width: 5px; height: 9px;
+    border: 2px solid #fff;
+    border-top: none; border-left: none;
+    transform: rotate(45deg) translateY(-1px);
+  }
+  .check-item.selected .check-mark { display: block; }
+
+  .avail-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .avail-table {
+    width: 100%;
+    min-width: 540px;
+    border-collapse: collapse;
+    font-size: 0.78rem;
+  }
+  .avail-table th {
+    background: var(--black);
+    color: #fff;
+    padding: 9px 6px;
+    text-align: center;
+    font-weight: 600;
+    font-size: 0.71rem;
+    letter-spacing: 0.4px;
+    white-space: nowrap;
+  }
+  .avail-table th:first-child { text-align: left; padding-left: 10px; width: 80px; }
+  .avail-table td {
+    border: 1px solid var(--border);
+    padding: 0;
+    text-align: center;
+  }
+  .avail-table td:first-child {
+    background: var(--gray);
+    font-weight: 700;
+    font-size: 0.82rem;
+    padding: 0 10px;
+    text-align: left;
+    white-space: nowrap;
+  }
+  .avail-cell {
+    display: block;
+    width: 100%;
+    height: 36px;
+    cursor: pointer;
+    transition: background .12s;
+  }
+  .avail-cell:hover { background: #ffe0e4; }
+  .avail-cell.active { background: var(--red); }
+
+  .ack-wrap {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    background: #fff8f8;
+    border: 1.5px solid #f5c0c8;
+    border-radius: 5px;
+    padding: 14px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .ack-wrap input[type=checkbox] { display: none; }
+  .ack-check {
+    width: 22px; height: 22px; flex-shrink: 0;
+    border: 2px solid var(--border);
+    border-radius: 3px;
+    margin-top: 1px;
+    display: flex; align-items: center; justify-content: center;
+    transition: border-color .15s, background .15s;
+  }
+  .ack-wrap.checked .ack-check {
+    background: var(--red);
+    border-color: var(--red);
+  }
+  .ack-check-mark {
+    display: none;
+    width: 6px; height: 11px;
+    border: 2px solid #fff;
+    border-top: none; border-left: none;
+    transform: rotate(45deg) translateY(-1px);
+  }
+  .ack-wrap.checked .ack-check-mark { display: block; }
+  .ack-text { font-size: 0.84rem; line-height: 1.55; color: #444; }
+  .ack-text strong { color: var(--black); }
+
+  .btn-submit {
+    display: block;
+    width: 100%;
+    margin-top: 28px;
+    padding: 14px;
+    background: var(--red);
+    color: #fff;
+    font-size: 1rem;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background .15s;
+  }
+  .btn-submit:hover:not(:disabled) { background: var(--red-dk); }
+  .btn-submit:disabled { background: #aaa; cursor: not-allowed; }
+
+  .msg { display: none; padding: 14px 16px; border-radius: 5px; margin-top: 18px; font-size: 0.9rem; font-weight: 500; }
+  .msg.success { background: #e6f9ee; color: #1a6b3a; border: 1.5px solid #8dd5a8; display: block; }
+  .msg.error   { background: #fff0f2; color: #a5001e; border: 1.5px solid #f5c0c8; display: block; }
+
+  footer {
+    background: var(--black);
+    color: rgba(255,255,255,.5);
+    text-align: center;
+    padding: 16px;
+    font-size: 0.75rem;
+  }
+</style>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="logo-mark">ASP</div>
+  <h1>Cross Training Program</h1>
+  <p>Sign up to expand your skills across multiple security positions</p>
+</header>
+
+<div class="card">
+  <div class="card-body">
+    <form id="ctForm" novalidate>
+
+      <div class="section-title">Personal Information</div>
+
+      <div class="field">
+        <label class="field-label" for="guardName">Guard Name <span class="req">*</span></label>
+        <input type="text" id="guardName" placeholder="First and Last Name" autocomplete="name">
+      </div>
+      <div class="field">
+        <label class="field-label" for="employeeId">Employee ID <span class="req">*</span></label>
+        <input type="text" id="employeeId" placeholder="e.g. 10042">
+      </div>
+
+      <div class="section-title">Cross Training Positions</div>
+      <p style="font-size:.83rem;color:#555;margin-bottom:12px;">Select all positions you are interested in.</p>
+
+      <div class="checkbox-grid" id="positionsGrid">
+        <label class="check-item" data-val="Airlines">
+          <input type="checkbox"><span class="check-box"><span class="check-mark"></span></span>Airlines
+        </label>
+        <label class="check-item" data-val="OSS">
+          <input type="checkbox"><span class="check-box"><span class="check-mark"></span></span>OSS (Officer Security Screening)
+        </label>
+        <label class="check-item" data-val="Door Patrol">
+          <input type="checkbox"><span class="check-box"><span class="check-mark"></span></span>Door Patrol
+        </label>
+        <label class="check-item" data-val="Security Driver">
+          <input type="checkbox"><span class="check-box"><span class="check-mark"></span></span>Security Driver
+        </label>
+        <label class="check-item" data-val="Lead / Shift Manager">
+          <input type="checkbox"><span class="check-box"><span class="check-mark"></span></span>Lead / Shift Manager
+        </label>
+      </div>
+
+      <div class="section-title">Availability</div>
+      <p style="font-size:.83rem;color:#555;margin-bottom:10px;">Tap the time slots you are available. Days with nothing selected are treated as <strong>Not Available</strong>.</p>
+
+      <div class="avail-wrap">
+        <table class="avail-table">
+          <thead>
+            <tr>
+              <th>Day</th>
+              <th>06:00–14:00</th>
+              <th>06:00–18:00</th>
+              <th>14:00–22:00</th>
+              <th>18:00–06:00</th>
+              <th>22:00–06:00</th>
+            </tr>
+          </thead>
+          <tbody id="availBody"></tbody>
+        </table>
+      </div>
+
+      <div class="section-title">Acknowledgement</div>
+
+      <label class="ack-wrap" id="ackWrap">
+        <input type="checkbox" id="ackCheck">
+        <span class="ack-check"><span class="ack-check-mark"></span></span>
+        <span class="ack-text">
+          <strong>I confirm</strong> that the information provided is accurate and I am voluntarily
+          expressing interest in cross-training. I understand this does not guarantee placement and
+          that scheduling is subject to operational requirements and management approval.
+        </span>
+      </label>
+
+      <button type="submit" class="btn-submit" id="submitBtn">Submit Application</button>
+      <div class="msg" id="msgBox"></div>
+
+    </form>
+  </div>
+</div>
+
+<footer>&copy; 2026 ASP Security Inc. &nbsp;|&nbsp; Cross Training Program</footer>
+
+<script>
+  var FLOW_URL = "POWER_AUTOMATE_FLOW_URL";
+
+  var DAYS  = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+  var SLOTS = ["06:00-14:00","06:00-18:00","14:00-22:00","18:00-06:00","22:00-06:00"];
+
+  // Build availability grid
+  var tbody = document.getElementById("availBody");
+  DAYS.forEach(function(day) {
+    var tr = document.createElement("tr");
+    var td0 = document.createElement("td");
+    td0.textContent = day.substring(0,3);
+    tr.appendChild(td0);
+    SLOTS.forEach(function(slot) {
+      var td = document.createElement("td");
+      var cell = document.createElement("span");
+      cell.className = "avail-cell";
+      cell.dataset.day  = day;
+      cell.dataset.slot = slot;
+      cell.addEventListener("click", function() { cell.classList.toggle("active"); });
+      td.appendChild(cell);
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+
+  // Position checkboxes
+  document.querySelectorAll(".check-item").forEach(function(item) {
+    item.addEventListener("click", function() {
+      var cb = item.querySelector("input[type=checkbox]");
+      cb.checked = !cb.checked;
+      item.classList.toggle("selected", cb.checked);
+    });
+  });
+
+  // Acknowledgement
+  var ackWrap  = document.getElementById("ackWrap");
+  var ackCheck = document.getElementById("ackCheck");
+  ackWrap.addEventListener("click", function() {
+    ackCheck.checked = !ackCheck.checked;
+    ackWrap.classList.toggle("checked", ackCheck.checked);
+  });
+
+  function serializeAvailability() {
+    var map = {};
+    document.querySelectorAll(".avail-cell.active").forEach(function(cell) {
+      var d = cell.dataset.day.substring(0,3);
+      if (!map[d]) map[d] = [];
+      map[d].push(cell.dataset.slot);
+    });
+    var keys = Object.keys(map);
+    if (!keys.length) return "Not Available";
+    return keys.map(function(d) { return d + ": " + map[d].join(", "); }).join("; ");
+  }
+
+  // Submit
+  document.getElementById("ctForm").addEventListener("submit", function(e) {
+    e.preventDefault();
+    var msgBox    = document.getElementById("msgBox");
+    var submitBtn = document.getElementById("submitBtn");
+    msgBox.className = "msg";
+    msgBox.textContent = "";
+
+    var guardName    = document.getElementById("guardName").value.trim();
+    var employeeId   = document.getElementById("employeeId").value.trim();
+    var positions    = Array.from(document.querySelectorAll(".check-item.selected"))
+                           .map(function(el) { return el.dataset.val; }).join(", ");
+    var availability = serializeAvailability();
+    var acknowledged = ackCheck.checked;
+
+    if (!guardName)    { return showMsg("Please enter your name.", "error"); }
+    if (!employeeId)   { return showMsg("Please enter your Employee ID.", "error"); }
+    if (!positions)    { return showMsg("Please select at least one position.", "error"); }
+    if (!acknowledged) { return showMsg("Please check the acknowledgement box.", "error"); }
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Submitting…";
+
+    var payload = {
+      guardName:    guardName,
+      employeeId:   employeeId,
+      positions:    positions,
+      availability: availability,
+      acknowledged: acknowledged,
+      submittedOn:  new Date().toISOString()
+    };
+
+    fetch(FLOW_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }).then(function(res) {
+      if (res.ok || res.status === 202) {
+        // reset form
+        document.getElementById("guardName").value = "";
+        document.getElementById("employeeId").value = "";
+        document.querySelectorAll(".check-item.selected").forEach(function(el) {
+          el.classList.remove("selected");
+          el.querySelector("input").checked = false;
+        });
+        document.querySelectorAll(".avail-cell.active").forEach(function(el) { el.classList.remove("active"); });
+        ackCheck.checked = false;
+        ackWrap.classList.remove("checked");
+        showMsg("Your application has been submitted successfully. We will be in touch!", "success");
+      } else {
+        showMsg("Submission failed (status " + res.status + "). Please try again or contact your supervisor.", "error");
+      }
+    }).catch(function() {
+      showMsg("Network error — please check your connection and try again.", "error");
+    }).finally(function() {
+      submitBtn.disabled = false;
+      submitBtn.textContent = "Submit Application";
+    });
+  });
+
+  function showMsg(text, type) {
+    var box = document.getElementById("msgBox");
+    box.textContent = text;
+    box.className = "msg " + type;
+    box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+</script>
+</body>
+</html>
