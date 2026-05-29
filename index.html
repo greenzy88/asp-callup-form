@@ -1411,8 +1411,7 @@ async function addExtractedOrder() {
        <p><strong>Guards:</strong> ${escHtml(newOrder.NumGuards)}</p>
        <p><strong>Location:</strong> ${escHtml(newOrder.Location)}</p>
        <p><strong>Site Contact:</strong> ${escHtml(newOrder.SiteContact)}</p>
-       <p><strong>Uploaded by:</strong> ${escHtml(displayName(currentUserUpn))}</p>
-       <p>Please review and update the status in the ASP Call Up Form system.</p>`;
+       <p><strong>Uploaded by:</strong> ${escHtml(displayName(currentUserUpn))}</p>`;
     for (const recipient of NOTIFY_RECIPIENTS) {
       await sendEmail(recipient, newSubject, newBody, newOrder.PDFFilename);
     }
