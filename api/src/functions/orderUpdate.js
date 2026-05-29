@@ -55,7 +55,7 @@ app.http("orderUpdate", {
       const after = Object.assign({}, before, fields, {
         OrderID: before.OrderID,
         UpdatedBy: actor,
-        LastUpdated: ts.toLocaleString(),
+        LastUpdated: ts.toLocaleString("en-US", { timeZone: "America/Toronto" }),
       });
       orderRows[idx] = after;
 
@@ -93,7 +93,7 @@ app.http("orderUpdate", {
             ? statusChange.to
             : (nonStatusChanges.length ? "Edited" : before.Status),
           ChangedBy: actor,
-          Timestamp: ts.toLocaleString(),
+          Timestamp: ts.toLocaleString("en-US", { timeZone: "America/Toronto" }),
           Notes: noteParts.join(" | "),
         });
       }

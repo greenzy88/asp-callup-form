@@ -44,7 +44,7 @@ app.http("ordersAdd", {
           OrderID: newId,
           Status: "Pending",
           UpdatedBy: `${actor} (PDF Upload)`,
-          LastUpdated: ts.toLocaleString(),
+          LastUpdated: ts.toLocaleString("en-US", { timeZone: "America/Toronto" }),
           Archived: "No",
         },
         body.order,
@@ -55,7 +55,7 @@ app.http("ordersAdd", {
         OrderID: newId,
         Status: order.Status,
         ChangedBy: `${actor} (PDF Upload)`,
-        Timestamp: ts.toLocaleString(),
+        Timestamp: ts.toLocaleString("en-US", { timeZone: "America/Toronto" }),
         Notes: body.historyNote || "Order created from PDF upload",
       });
 
