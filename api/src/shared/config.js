@@ -48,4 +48,18 @@ module.exports = {
   // owner (David), but the name field masks it visually. Configurable
   // via SWA app setting so wording tweaks don't need a code push.
   senderDisplayName: () => optional("SENDER_DISPLAY_NAME", "ASP Call-Up Notifications (Do Not Reply)"),
+  // Recipient allowlist for /api/email (2026-05-28). Comma-separated list
+  // of exact addresses (e.g. "ops@x.com") and/or whole domains prefixed
+  // with "@" (e.g. "@security-asp.com"). Empty/unset => no domain
+  // restriction (format + count caps still apply), and a warning is logged.
+  // Set this app setting to the real BBTCA notification recipients to close
+  // the "send arbitrary mail as the owner" relay risk.
+  emailRecipientAllowlist: () =>
+    optional("EMAIL_RECIPIENT_ALLOWLIST", "")
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean),
+  // Hard cap on recipients per send — defends against mass-mail abuse even
+  // when no allowlist is configured.
+  emailMaxRecipients: () => parseInt(optional("EMAIL_MAX_RECIPIENTS", "15"), 10),
 };

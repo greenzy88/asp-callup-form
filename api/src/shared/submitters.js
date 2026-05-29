@@ -47,6 +47,42 @@ const PRE_SEED = [
 const _revocationCache = new Map();
 const REVOCATION_CACHE_TTL_MS = 60 * 1000;
 
+// PIN brute-force lockout (2026-05-28). A 4-digit PIN is only 10,000
+// combinations; verifyPin previously had no attempt limit, so any caller
+// who reached the endpoint could enumerate a colleague's PIN online. We
+// lock a submitter after MAX_PIN_ATTEMPTS consecutive failures for
+// PIN_LOCKOUT_MS. State is in-memory (per Function instance): adequate
+// here because (a) the auth layer already restricts callers to
+// authenticated org users so the residual threat is insider impersonation,
+// and (b) sustained attack keeps the instance warm so the counter persists.
+// Map<submitterId, { fails, lockedUntil }>
+const _pinAttempts = new Map();
+const MAX_PIN_ATTEMPTS = 5;
+const PIN_LOCKOUT_MS = 15 * 60 * 1000;
+
+function _pinLockState(submitterId) {
+  const rec = _pinAttempts.get(String(submitterId));
+  if (rec && rec.lockedUntil && rec.lockedUntil > Date.now()) {
+    return { locked: true, retryAfterMs: rec.lockedUntil - Date.now() };
+  }
+  return { locked: false, retryAfterMs: 0 };
+}
+
+function _pinRecordFailure(submitterId) {
+  const id = String(submitterId);
+  const rec = _pinAttempts.get(id) || { fails: 0, lockedUntil: 0 };
+  rec.fails += 1;
+  if (rec.fails >= MAX_PIN_ATTEMPTS) {
+    rec.lockedUntil = Date.now() + PIN_LOCKOUT_MS;
+    rec.fails = 0; // reset the counter; the clock is now the gate
+  }
+  _pinAttempts.set(id, rec);
+}
+
+function _pinClear(submitterId) {
+  _pinAttempts.delete(String(submitterId));
+}
+
 function _now() { return new Date().toISOString(); }
 function _newSalt() { return crypto.randomBytes(16).toString("hex"); }
 function _newId() { return crypto.randomUUID(); }
@@ -253,6 +289,13 @@ async function setInitialPin(submitterId, pin, parentAccount) {
 // On success, bump LastSeenAt and return a fresh token.
 async function verifyPin(submitterId, pin, parentAccount) {
   _validatePinFormat(pin);
+  // Lockout gate — reject before doing any work (and before the hash
+  // compare) once a submitter has tripped the failure threshold.
+  const lock = _pinLockState(submitterId);
+  if (lock.locked) {
+    const mins = Math.ceil(lock.retryAfterMs / 60000);
+    throw _err(429, `Too many incorrect PIN attempts. Try again in ${mins} minute(s).`, "PIN_LOCKED");
+  }
   const { itemId, rows } = await readAll();
   const idx = rows.findIndex((r) => String(r.SubmitterID) === String(submitterId));
   if (idx < 0) throw _err(404, "Submitter not found", "NOT_FOUND");
@@ -272,8 +315,12 @@ async function verifyPin(submitterId, pin, parentAccount) {
   // timingSafeEqual throws if lengths differ; same-length is guaranteed
   // by hex of fixed-output HMAC, but defend anyway.
   const ok = a.length === b.length && crypto.timingSafeEqual(a, b);
-  if (!ok) throw _err(401, "PIN incorrect", "BAD_PIN");
+  if (!ok) {
+    _pinRecordFailure(submitterId);
+    throw _err(401, "PIN incorrect", "BAD_PIN");
+  }
 
+  _pinClear(submitterId); // successful login resets the failure counter
   rows[idx] = Object.assign({}, row, { LastSeenAt: _now() });
   await writeSheet(itemId, SHEET_NAME, rows, SUBMITTERS_HEADERS);
   _invalidateCache(rows[idx].SubmitterID);

@@ -29,6 +29,40 @@ app.http("email", {
         return { status: 400, jsonBody: { error: "Body must include to/subject/html" } };
       }
 
+      // 2026-05-28 — recipient hardening. /api/email sends AS THE OWNER, so
+      // an unconstrained `to` makes the owner's mailbox an open relay for
+      // phishing. Enforce: valid email format, a per-send count cap, and
+      // (when configured) an allowlist of exact addresses / @domains.
+      const recipients = (Array.isArray(to) ? to : [to])
+        .map((a) => String(a || "").trim().toLowerCase())
+        .filter(Boolean);
+      if (!recipients.length) {
+        return { status: 400, jsonBody: { error: "No valid recipient in `to`" } };
+      }
+      const maxRecipients = config.emailMaxRecipients();
+      if (recipients.length > maxRecipients) {
+        return { status: 400, jsonBody: { error: `Too many recipients (max ${maxRecipients})` } };
+      }
+      const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      const badFormat = recipients.filter((a) => !EMAIL_RE.test(a));
+      if (badFormat.length) {
+        return { status: 400, jsonBody: { error: `Malformed recipient(s): ${badFormat.join(", ")}` } };
+      }
+      const allowlist = config.emailRecipientAllowlist();
+      if (allowlist.length) {
+        const allowed = (addr) =>
+          allowlist.some((rule) =>
+            rule.startsWith("@") ? addr.endsWith(rule) : addr === rule
+          );
+        const blocked = recipients.filter((a) => !allowed(a));
+        if (blocked.length) {
+          ctx.warn(`email: blocked non-allowlisted recipient(s): ${blocked.join(", ")}`);
+          return { status: 403, jsonBody: { error: `Recipient(s) not permitted: ${blocked.join(", ")}` } };
+        }
+      } else {
+        ctx.warn("email: EMAIL_RECIPIENT_ALLOWLIST not configured — sending without domain restriction");
+      }
+
       // 2026-05-27 — optionally attach a PDF from the owner's ASP-CallUp
       // folder. Same filename safety as pdfDownload. Graph sendMail
       // supports file attachments up to 4 MB inline; typical TPO PDFs
@@ -76,8 +110,8 @@ app.http("email", {
               address: config.ownerUpn(),
             },
           },
-          toRecipients: (Array.isArray(to) ? to : [to]).map((addr) => ({
-            emailAddress: { address: String(addr) },
+          toRecipients: recipients.map((addr) => ({
+            emailAddress: { address: addr },
           })),
           ...(attachments.length ? { attachments } : {}),
         },
