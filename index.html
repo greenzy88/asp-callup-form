@@ -405,6 +405,25 @@ function escHtml(s) {
     .replace(/'/g, '&#39;');
 }
 
+// Render an order's Duties field as an HTML bullet list for emails. Duties are
+// stored as "• "-prefixed, newline-separated text (see the PDF extraction in
+// addExtractedOrder). Split into items, strip any leading bullet marker, and
+// escHtml each one — duties are PDF-extracted (external-party content), so every
+// item must be escaped like the rest of the email body. Returns "" when there
+// are no duties, so the section is omitted entirely.
+function dutiesListHtml(duties) {
+  if (!duties || !String(duties).trim()) return '';
+  const items = String(duties)
+    .split(/\r?\n+|(?=•)/)
+    .map(s => s.replace(/^[\s•\-*]+/, '').trim())
+    .filter(s => s.length > 0);
+  if (!items.length) return '';
+  return '<p style="margin-bottom:4px"><strong>Duties:</strong></p>'
+    + '<ul style="margin-top:0;padding-left:20px">'
+    + items.map(s => `<li>${escHtml(s)}</li>`).join('')
+    + '</ul>';
+}
+
 // Strip path-traversal characters, control bytes, and length-cap a filename
 // before using it as a OneDrive item name. PDFs come from an external party
 // (BBTCA), so a filename like "../../../shared/secrets.pdf" is conceivable.
@@ -1111,6 +1130,7 @@ async function updateStatus() {
        <p><strong>End Date:</strong> ${escHtml(order.EndDate)}</p>
        <p><strong>Meeting Location:</strong> ${escHtml(order.Location)}</p>
        <p><strong>Guards:</strong> ${escHtml(order.NumGuards)}</p>
+       ${dutiesListHtml(order.Duties)}
        <p><strong>Updated by:</strong> ${escHtml(updatedBy)}</p>
        <p>Your temporary post order has been scheduled and approved. Please confirm receipt.</p>`;
     for (const recipient of NOTIFY_RECIPIENTS) {
@@ -1125,6 +1145,7 @@ async function updateStatus() {
        <p><strong>End Date:</strong> ${escHtml(order.EndDate)}</p>
        <p><strong>Meeting Location:</strong> ${escHtml(order.Location)}</p>
        <p><strong>Guards:</strong> ${escHtml(order.NumGuards)}</p>
+       ${dutiesListHtml(order.Duties)}
        <p><strong>Marked completed by:</strong> ${escHtml(updatedBy)}</p>
        ${note ? `<p><strong>Note:</strong> ${escHtml(note)}</p>` : ""}
        <p>This temporary post order has been marked completed.</p>`;
@@ -1166,6 +1187,7 @@ async function markCompleted() {
      <p><strong>End Date:</strong> ${escHtml(order.EndDate)}</p>
      <p><strong>Meeting Location:</strong> ${escHtml(order.Location)}</p>
      <p><strong>Guards:</strong> ${escHtml(order.NumGuards)}</p>
+     ${dutiesListHtml(order.Duties)}
      <p><strong>Marked completed by:</strong> ${escHtml(updatedBy)}</p>
      <p>This temporary post order has been marked completed.</p>`;
   for (const recipient of NOTIFY_RECIPIENTS) {
@@ -1411,6 +1433,7 @@ async function addExtractedOrder() {
        <p><strong>Guards:</strong> ${escHtml(newOrder.NumGuards)}</p>
        <p><strong>Meeting Location:</strong> ${escHtml(newOrder.Location)}</p>
        <p><strong>Site Contact:</strong> ${escHtml(newOrder.SiteContact)}</p>
+       ${dutiesListHtml(newOrder.Duties)}
        <p><strong>Uploaded by:</strong> ${escHtml(displayName(currentUserUpn))}</p>`;
     for (const recipient of NOTIFY_RECIPIENTS) {
       await sendEmail(recipient, newSubject, newBody, newOrder.PDFFilename);
