@@ -1109,7 +1109,7 @@ async function updateStatus() {
        <p><strong>Event:</strong> ${escHtml(order.Event)}</p>
        <p><strong>Start Date:</strong> ${escHtml(order.StartDate)}</p>
        <p><strong>End Date:</strong> ${escHtml(order.EndDate)}</p>
-       <p><strong>Location:</strong> ${escHtml(order.Location)}</p>
+       <p><strong>Meeting Location:</strong> ${escHtml(order.Location)}</p>
        <p><strong>Guards:</strong> ${escHtml(order.NumGuards)}</p>
        <p><strong>Updated by:</strong> ${escHtml(updatedBy)}</p>
        <p>Your temporary post order has been scheduled and approved. Please confirm receipt.</p>`;
@@ -1123,7 +1123,7 @@ async function updateStatus() {
        <p><strong>Event:</strong> ${escHtml(order.Event)}</p>
        <p><strong>Start Date:</strong> ${escHtml(order.StartDate)}</p>
        <p><strong>End Date:</strong> ${escHtml(order.EndDate)}</p>
-       <p><strong>Location:</strong> ${escHtml(order.Location)}</p>
+       <p><strong>Meeting Location:</strong> ${escHtml(order.Location)}</p>
        <p><strong>Guards:</strong> ${escHtml(order.NumGuards)}</p>
        <p><strong>Marked completed by:</strong> ${escHtml(updatedBy)}</p>
        ${note ? `<p><strong>Note:</strong> ${escHtml(note)}</p>` : ""}
@@ -1164,7 +1164,7 @@ async function markCompleted() {
      <p><strong>Event:</strong> ${escHtml(order.Event)}</p>
      <p><strong>Start Date:</strong> ${escHtml(order.StartDate)}</p>
      <p><strong>End Date:</strong> ${escHtml(order.EndDate)}</p>
-     <p><strong>Location:</strong> ${escHtml(order.Location)}</p>
+     <p><strong>Meeting Location:</strong> ${escHtml(order.Location)}</p>
      <p><strong>Guards:</strong> ${escHtml(order.NumGuards)}</p>
      <p><strong>Marked completed by:</strong> ${escHtml(updatedBy)}</p>
      <p>This temporary post order has been marked completed.</p>`;
@@ -1335,7 +1335,7 @@ function renderExtractedFields(d) {
     <div class="extracted-field"><label># Guards</label><input class="form-control form-control-sm" id="ef_numGuards" value="${esc(d.numGuards || '1')}"></div>
     <div class="extracted-field"><label>Days</label><input class="form-control form-control-sm" id="ef_days" value="${esc(d.days)}"></div>
     <div class="extracted-field"><label>Coverage</label><input class="form-control form-control-sm" id="ef_coverage" value="${esc(d.coverage)}"></div>
-    <div class="extracted-field"><label>Location</label><input class="form-control form-control-sm" id="ef_meetingLocation" value="${esc(d.meetingLocation)}"></div>
+    <div class="extracted-field"><label>Meeting Location</label><input class="form-control form-control-sm" id="ef_meetingLocation" value="${esc(d.meetingLocation)}"></div>
     <div class="extracted-field"><label>Site Contact</label><input class="form-control form-control-sm" id="ef_siteContact" value="${esc(d.siteContact)}"></div>
     <div class="extracted-field"><label>Contact #</label><input class="form-control form-control-sm" id="ef_contactNumber" value="${esc(d.contactNumber)}"></div>
     <div class="extracted-field"><label>PPE Required</label><input class="form-control form-control-sm" id="ef_ppe" value="${esc(d.ppe)}"></div>
@@ -1409,7 +1409,7 @@ async function addExtractedOrder() {
        <p><strong>Start Date:</strong> ${escHtml(newOrder.StartDate)}</p>
        <p><strong>End Date:</strong> ${escHtml(newOrder.EndDate)}</p>
        <p><strong>Guards:</strong> ${escHtml(newOrder.NumGuards)}</p>
-       <p><strong>Location:</strong> ${escHtml(newOrder.Location)}</p>
+       <p><strong>Meeting Location:</strong> ${escHtml(newOrder.Location)}</p>
        <p><strong>Site Contact:</strong> ${escHtml(newOrder.SiteContact)}</p>
        <p><strong>Uploaded by:</strong> ${escHtml(displayName(currentUserUpn))}</p>`;
     for (const recipient of NOTIFY_RECIPIENTS) {
