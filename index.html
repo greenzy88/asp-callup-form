@@ -83,6 +83,12 @@
     .extracted-field{display:flex;gap:10px;align-items:flex-start;margin-bottom:8px;}
     .extracted-field label{font-size:.8rem;color:#555;margin:0;flex:0 0 160px;padding-top:6px;}
     .extracted-field input,.extracted-field textarea{font-size:.85rem;flex:1;}
+    /* Mobile only: stack each review field's input UNDERNEATH its label so the
+       input gets full readable width (desktop >=768px keeps side-by-side). */
+    @media (max-width: 767px){
+      .extracted-field{flex-direction:column;align-items:stretch;gap:3px;margin-bottom:12px;}
+      .extracted-field label{flex:0 0 auto;padding-top:0;font-weight:600;}
+    }
     .user-badge{background:#e7f3ff;color:var(--asp-blue);padding:4px 12px;border-radius:20px;font-size:.8rem;font-weight:600;}
     .history-entry{background:#f8f9fa;border-left:3px solid var(--asp-blue);padding:8px 12px;margin-bottom:8px;border-radius:0 6px 6px 0;font-size:.8rem;}
     .history-entry .history-status{font-weight:700;color:var(--asp-blue);}
@@ -260,6 +266,7 @@
     <h5>&#x1F510; M365 Authentication Required</h5>
     <p>Click below to sign in with your Microsoft 365 account to access the call-up form system.</p>
     <button class="btn btn-primary" onclick="loginPopup()">Sign In with M365</button>
+    <p class="mb-0 mt-3 small" style="color:#664d03;">&#x1F4DE; Please call the ASP Shift Manager at <a href="tel:+16474572716" style="font-weight:600;color:#664d03;text-decoration:underline;">(647)&nbsp;457-2716</a> for the verification code.</p>
   </div>
 
   <div id="appContent" style="display:none;">
@@ -368,35 +375,33 @@ const CLIENT_UPNS = [
 // ── Notification routing (switch-gated) ─────────────────────────────────
 // David is the sole recipient of every notification until the per-status
 // "basket" routing is turned on. Leave NOTIFICATION_ROUTING_ENABLED = false to
-// preserve today's behaviour exactly (everything to ADMIN_RECIPIENT; the
-// initiation PDF attachment to the admin is preserved). To turn the switch on:
+// preserve today's behaviour (everything to ADMIN_RECIPIENT). To turn it on:
 //   1) set NOTIFICATION_ROUTING_ENABLED = true and fill in STATUS_RECIPIENTS,
-//   2) add orders@security-asp.com (or @security-asp.com) to the
+//   2) add every basket address (incl. orders@security-asp.com) to the
 //      EMAIL_RECIPIENT_ALLOWLIST app setting (else email.js 403s the send).
-// When ON: notifications route by the order's status basket, and at completion
-// orders@ ALSO receives a single-recipient copy WITH the post-order PDF attached.
+// The post-order PDF is attached on submission ("new") AND on completion — to
+// EVERY recipient of that notification (the latest/final PDF at completion).
+// Edits, revisions and scheduling go out with no attachment.
 const NOTIFICATION_ROUTING_ENABLED = false;
 const ADMIN_RECIPIENT  = "dramlagan@security-asp.com";
 const ORDERS_RECIPIENT = "orders@security-asp.com";
 const STATUS_RECIPIENTS = {            // consulted only when routing is ENABLED
   Pending:   [ADMIN_RECIPIENT],
   Scheduled: [ADMIN_RECIPIENT],
-  Completed: [ADMIN_RECIPIENT],
+  Completed: [ADMIN_RECIPIENT, ORDERS_RECIPIENT],  // orders@ is a designated completion recipient
 };
 
 // event: "new" | "edit" | "scheduled" | "completed"; statusBasket = order Status.
-// Returns an array of { to, attach } sends. The PDF is attached on initiation
-// (to that notification's recipients) and, at completion, to orders@ only.
+// Returns an array of { to, attach } sends. The PDF rides along on submission
+// ("new") and completion ("completed") to ALL recipients of that notification.
 function notifyTargets(event, statusBasket, attachmentFilename) {
+  const withPdf = (event === "new" || event === "completed");
+  const attach = withPdf ? (attachmentFilename || null) : null;
   if (!NOTIFICATION_ROUTING_ENABLED) {
-    return [{ to: ADMIN_RECIPIENT, attach: event === "new" ? (attachmentFilename || null) : null }];
+    return [{ to: ADMIN_RECIPIENT, attach }];
   }
   const basket = STATUS_RECIPIENTS[statusBasket] || [ADMIN_RECIPIENT];
-  const sends = basket.map(to => ({ to, attach: event === "new" ? (attachmentFilename || null) : null }));
-  if (event === "completed" && attachmentFilename) {
-    sends.push({ to: ORDERS_RECIPIENT, attach: attachmentFilename });
-  }
-  return sends;
+  return basket.map(to => ({ to, attach }));
 }
 
 // Display names used in the user badge + Status History "ChangedBy"
