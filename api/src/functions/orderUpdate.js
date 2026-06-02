@@ -26,18 +26,6 @@ app.http("orderUpdate", {
       if (!fields || typeof fields !== "object") {
         return { status: 400, jsonBody: { error: "Body.fields must be an object" } };
       }
-      // Managers + owner can change any status. Clients (canEdit but not
-      // canManageStatus) can ONLY mark an order Completed — and only as a
-      // single-field Status change (no smuggling other field edits in
-      // the same call).
-      if (!canManageStatus(upn)) {
-        const fieldKeys = Object.keys(fields);
-        const isCompletedOnly = fieldKeys.length === 1 && fields.Status === "Completed";
-        if (!canEdit(upn) || !isCompletedOnly) {
-          return { status: 403, jsonBody: { error: "Only managers can update order status" } };
-        }
-      }
-
       const itemId = await workbookItemId();
       const [orders, history] = await Promise.all([
         readSheet(itemId, "Orders"),
@@ -52,6 +40,23 @@ app.http("orderUpdate", {
 
       const ts = new Date();
       const before = orderRows[idx];
+
+      // Managers + owner can change any status. Clients (canEdit but not
+      // canManageStatus) can ONLY (a) mark an order Completed as a single-field
+      // Status change, or (b) upload a revised post order — a PATCH that bumps
+      // Version and does NOT change Status. Either way a client cannot set an
+      // arbitrary status (Pending/Scheduled) or smuggle a status change into a
+      // revision. (Order is loaded first so the revision check can read
+      // before.Version; auth + submitter token already ran above.)
+      if (!canManageStatus(upn)) {
+        const fieldKeys = Object.keys(fields);
+        const isCompletedOnly = fieldKeys.length === 1 && fields.Status === "Completed";
+        const isRevision = !("Status" in fields) &&
+          (Number(fields.Version) || 0) > (Number(before.Version) || 1);
+        if (!canEdit(upn) || !(isCompletedOnly || isRevision)) {
+          return { status: 403, jsonBody: { error: "Only managers can update order status" } };
+        }
+      }
       const after = Object.assign({}, before, fields, {
         OrderID: before.OrderID,
         UpdatedBy: actor,
@@ -59,9 +64,17 @@ app.http("orderUpdate", {
       });
       orderRows[idx] = after;
 
+      // Detect a post-order revision (Version bump) so the history row can be
+      // labelled "Revised (Vn)" rather than the generic "Edited".
+      const verBefore = Number(before.Version) || 1;
+      const verAfter = Number(after.Version) || verBefore;
+      const isRevision = verAfter > verBefore;
+
       // Diff every non-meta field so non-status edits (Days, EndTime, ...)
-      // also leave an audit trail in StatusHistory.
-      const META_FIELDS = new Set(["UpdatedBy", "LastUpdated", "OrderID"]);
+      // also leave an audit trail in StatusHistory. PDFFilename + Version are
+      // treated as meta so a revision doesn't emit noisy raw-string diff lines
+      // (the "Revised (Vn)" label + the real field diffs carry the meaning).
+      const META_FIELDS = new Set(["UpdatedBy", "LastUpdated", "OrderID", "PDFFilename", "Version"]);
       const norm = (v) => (v === undefined || v === null ? "" : String(v));
       const truncate = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
       const changes = [];
@@ -91,7 +104,9 @@ app.http("orderUpdate", {
           OrderID: before.OrderID,
           Status: statusChange
             ? statusChange.to
-            : (nonStatusChanges.length ? "Edited" : before.Status),
+            : isRevision
+              ? `Revised (V${verAfter})`
+              : (nonStatusChanges.length ? "Edited" : before.Status),
           ChangedBy: actor,
           Timestamp: ts.toLocaleString("en-US", { timeZone: "America/Toronto" }),
           Notes: noteParts.join(" | "),

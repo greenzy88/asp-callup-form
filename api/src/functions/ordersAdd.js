@@ -46,6 +46,7 @@ app.http("ordersAdd", {
           UpdatedBy: `${actor} (PDF Upload)`,
           LastUpdated: ts.toLocaleString("en-US", { timeZone: "America/Toronto" }),
           Archived: "No",
+          Version: 1,
         },
         body.order,
         { OrderID: newId }  // never let client override the generated ID

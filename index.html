@@ -272,7 +272,7 @@
 
     <div class="card mb-4 border-0 shadow-sm" id="uploadCard" style="display:none;">
       <div class="card-body p-4">
-        <h5 class="mb-1 fw-bold" style="color:var(--asp-blue)">&#x1F4C4; Upload a Temporary Post Order PDF</h5>
+        <h5 class="mb-1 fw-bold" id="uploadCardTitle" style="color:var(--asp-blue)">&#x1F4C4; Upload a Temporary Post Order PDF</h5>
         <p class="text-muted small mb-3">Drop in any BBTCA Temporary Post Order PDF — fields are read automatically.</p>
         <div class="upload-zone" onclick="document.getElementById('pdfInput').click()">
           <div style="font-size:2.5rem;">&#x1F4C1;</div>
@@ -291,7 +291,7 @@
           <h6 class="fw-bold mb-3" style="color:var(--asp-blue)">&#x2713; Extracted Fields — review before saving</h6>
           <div id="extractedFields"></div>
           <div class="d-flex gap-2 mt-3">
-            <button class="btn btn-sm btn-success" onclick="addExtractedOrder()">&#x2795; Add to Order List</button>
+            <button class="btn btn-sm btn-success" id="confirmExtractedBtn" onclick="confirmExtracted()">&#x2795; Add to Order List</button>
             <button class="btn btn-sm btn-outline-secondary" onclick="cancelExtracted()">Cancel</button>
           </div>
         </div>
@@ -365,7 +365,39 @@ const MANAGER_UPNS = [
 const CLIENT_UPNS = [
   "atraining@security-asp.com"
 ];
-const NOTIFY_RECIPIENTS = ["dramlagan@security-asp.com"];
+// ── Notification routing (switch-gated) ─────────────────────────────────
+// David is the sole recipient of every notification until the per-status
+// "basket" routing is turned on. Leave NOTIFICATION_ROUTING_ENABLED = false to
+// preserve today's behaviour exactly (everything to ADMIN_RECIPIENT; the
+// initiation PDF attachment to the admin is preserved). To turn the switch on:
+//   1) set NOTIFICATION_ROUTING_ENABLED = true and fill in STATUS_RECIPIENTS,
+//   2) add orders@security-asp.com (or @security-asp.com) to the
+//      EMAIL_RECIPIENT_ALLOWLIST app setting (else email.js 403s the send).
+// When ON: notifications route by the order's status basket, and at completion
+// orders@ ALSO receives a single-recipient copy WITH the post-order PDF attached.
+const NOTIFICATION_ROUTING_ENABLED = false;
+const ADMIN_RECIPIENT  = "dramlagan@security-asp.com";
+const ORDERS_RECIPIENT = "orders@security-asp.com";
+const STATUS_RECIPIENTS = {            // consulted only when routing is ENABLED
+  Pending:   [ADMIN_RECIPIENT],
+  Scheduled: [ADMIN_RECIPIENT],
+  Completed: [ADMIN_RECIPIENT],
+};
+
+// event: "new" | "edit" | "scheduled" | "completed"; statusBasket = order Status.
+// Returns an array of { to, attach } sends. The PDF is attached on initiation
+// (to that notification's recipients) and, at completion, to orders@ only.
+function notifyTargets(event, statusBasket, attachmentFilename) {
+  if (!NOTIFICATION_ROUTING_ENABLED) {
+    return [{ to: ADMIN_RECIPIENT, attach: event === "new" ? (attachmentFilename || null) : null }];
+  }
+  const basket = STATUS_RECIPIENTS[statusBasket] || [ADMIN_RECIPIENT];
+  const sends = basket.map(to => ({ to, attach: event === "new" ? (attachmentFilename || null) : null }));
+  if (event === "completed" && attachmentFilename) {
+    sends.push({ to: ORDERS_RECIPIENT, attach: attachmentFilename });
+  }
+  return sends;
+}
 
 // Display names used in the user badge + Status History "ChangedBy"
 const USER_DISPLAY_NAMES = {
@@ -434,6 +466,18 @@ function safeFilename(name) {
     .replace(/\.{2,}/g, '.')            // collapse ".." traversal
     .replace(/^\.+|\.+$/g, '')          // leading/trailing dots
     .slice(0, 200) || 'unnamed.pdf';
+}
+
+// Stricter filename sanitizer for the REVISED-PDF path. The legacy safeFilename
+// above leaves characters like ( ) & ' , # intact, which the backend SAFE_NAME
+// regex (/^[\w\-. ]{1,200}\.pdf$/i in pdfUpload.js) rejects with a 400.
+// strictSafeName maps anything outside [\w\-. ] to "_" and caps the base length
+// so the "TPO-YYYY-NNN_vN_" prefix keeps the whole name under 200 chars.
+function strictSafeName(name) {
+  let base = String(name || 'file.pdf').replace(/\.pdf$/i, '');
+  base = base.replace(/[^\w\-. ]+/g, '_').replace(/\s+/g, ' ').trim();
+  if (!base) base = 'file';
+  return base.slice(0, 150) + '.pdf';
 }
 
 const msalConfig = {
@@ -725,6 +769,30 @@ async function sendEmail(recipient, subject, body, attachmentFilename) {
   }
 }
 
+// ── Completion notification (switch-gated routing) ──
+// Sends the "Completed" email to the routed recipients. While the routing
+// switch is OFF this is just the admin (no attachment) — identical to before.
+// While ON, the Completed basket is notified (un-attached) AND orders@ gets a
+// dedicated single-recipient copy WITH the latest post-order PDF attached.
+async function notifyCompleted(order, note) {
+  const updatedBy = displayName(currentUserUpn);
+  const subject = `Call Up Request Completed: ${order.OrderID} - ${order.Event}`;
+  const body = `<h2>Call Up Request Completed</h2>
+     <p><strong>Order ID:</strong> ${escHtml(order.OrderID)}</p>
+     <p><strong>Event:</strong> ${escHtml(order.Event)}</p>
+     <p><strong>Start Date:</strong> ${escHtml(order.StartDate)}</p>
+     <p><strong>End Date:</strong> ${escHtml(order.EndDate)}</p>
+     <p><strong>Meeting Location:</strong> ${escHtml(order.Location)}</p>
+     <p><strong>Guards:</strong> ${escHtml(order.NumGuards)}</p>
+     ${dutiesListHtml(order.Duties)}
+     <p><strong>Marked completed by:</strong> ${escHtml(updatedBy)}</p>
+     ${note ? `<p><strong>Note:</strong> ${escHtml(note)}</p>` : ""}
+     <p>This temporary post order has been marked completed.</p>`;
+  for (const t of notifyTargets("completed", "Completed", order.PDFFilename || undefined)) {
+    await sendEmail(t.to, subject, body, t.attach);
+  }
+}
+
 // Anti-wipe sanity check kept for any future bulk-mutation paths.
 // Currently no caller invokes a bulk replace; left in place so future
 // code that does can opt-in. Returns true to proceed.
@@ -801,6 +869,10 @@ function renderTable() {
 
 function selectOrder(id) {
   selectedId = id;
+  // Opening/refreshing an order clears any half-armed "revise" state from a
+  // prior order so the shared upload card can't misfire as a revision.
+  window.reviseTargetId = null;
+  _setUploadCardMode(null);
   const o = orders.find(x => x.OrderID === id);
   if (!o) return;
   document.getElementById("detailTitle").textContent = o.OrderID + " – " + (o.Event || '');
@@ -832,6 +904,11 @@ function selectOrder(id) {
     const markCompletedBtn = (!isEditingFields && o.Status !== "Completed" && !isManager)
       ? `<button class="btn btn-sm" style="background:var(--asp-blue);color:#fff" onclick="markCompleted()">&#x2713; Mark as Completed</button>`
       : '';
+    // Upload Revised PDF — open to anyone with edit rights (admin + client),
+    // on any non-completed, non-archived order. Reuses the create review card.
+    const reviseBtn = (!isEditingFields && o.Status !== "Completed" && (!o.Archived || o.Archived === "No"))
+      ? `<button class="btn btn-sm btn-outline-primary" onclick="startReviseUpload()">&#x1F4C4; Upload Revised PDF</button>`
+      : '';
     headerHtml = isEditingFields
       ? `<div class="d-flex gap-2 mb-3 flex-wrap">
            <button class="btn btn-sm" style="background:var(--asp-blue);color:#fff" onclick="saveFieldChanges()">&#x2713; Save Changes</button>
@@ -839,6 +916,7 @@ function selectOrder(id) {
          </div>`
       : `<div class="d-flex gap-2 mb-3 flex-wrap">
            <button class="btn btn-sm btn-outline-primary" onclick="editFields()">&#x270E; Edit Fields</button>
+           ${reviseBtn}
            ${markCompletedBtn}
          </div>`;
   }
@@ -1075,7 +1153,7 @@ async function saveFieldChanges() {
   }
   await loadDataFromExcel();
 
-  // Notify the admin (NOTIFY_RECIPIENTS — currently just David)
+  // Build the change summary, then notify via the shared routing layer below.
   const summary = changes
     .map(c => `<li><strong>${c.field}:</strong> "${escAttr(c.oldVal)}" → "${escAttr(c.newVal)}"</li>`)
     .join("");
@@ -1087,11 +1165,10 @@ async function saveFieldChanges() {
      <p><strong>Timestamp:</strong> ${ts}</p>
      <p><strong>Changes:</strong></p>
      <ul>${summary}</ul>`;
-  // 2026-05-27 — PDF only attached on the original "submitted"
-  // notification. Lifecycle updates (changed/scheduled/completed)
-  // skip the attachment per David's directive.
-  for (const recipient of NOTIFY_RECIPIENTS) {
-    await sendEmail(recipient, subject, body);
+  // Routed through the shared notification layer (switch-gated). While the
+  // switch is OFF this is the admin only, no attachment — as before.
+  for (const t of notifyTargets("edit", order.Status)) {
+    await sendEmail(t.to, subject, body, t.attach);
   }
 
   isEditingFields = false;
@@ -1133,25 +1210,14 @@ async function updateStatus() {
        ${dutiesListHtml(order.Duties)}
        <p><strong>Updated by:</strong> ${escHtml(updatedBy)}</p>
        <p>Your temporary post order has been scheduled and approved. Please confirm receipt.</p>`;
-    for (const recipient of NOTIFY_RECIPIENTS) {
-      await sendEmail(recipient, subject, body);
+    for (const t of notifyTargets("scheduled", "Scheduled")) {
+      await sendEmail(t.to, subject, body, t.attach);
     }
   } else if (newStatus === "Completed") {
-    const subject = `Call Up Request Completed: ${selectedId} - ${order.Event}`;
-    const body = `<h2>Call Up Request Completed</h2>
-       <p><strong>Order ID:</strong> ${escHtml(selectedId)}</p>
-       <p><strong>Event:</strong> ${escHtml(order.Event)}</p>
-       <p><strong>Start Date:</strong> ${escHtml(order.StartDate)}</p>
-       <p><strong>End Date:</strong> ${escHtml(order.EndDate)}</p>
-       <p><strong>Meeting Location:</strong> ${escHtml(order.Location)}</p>
-       <p><strong>Guards:</strong> ${escHtml(order.NumGuards)}</p>
-       ${dutiesListHtml(order.Duties)}
-       <p><strong>Marked completed by:</strong> ${escHtml(updatedBy)}</p>
-       ${note ? `<p><strong>Note:</strong> ${escHtml(note)}</p>` : ""}
-       <p>This temporary post order has been marked completed.</p>`;
-    for (const recipient of NOTIFY_RECIPIENTS) {
-      await sendEmail(recipient, subject, body);
-    }
+    // Re-find the order from the just-reloaded list so a freshly-revised
+    // PDFFilename (V2) is the one attached to the orders@ copy when routing is on.
+    const fresh = orders.find(o => o.OrderID === selectedId) || order;
+    await notifyCompleted(fresh, note);
   }
 
   document.getElementById("newNote").value = "";
@@ -1178,21 +1244,10 @@ async function markCompleted() {
     return;
   }
   await loadDataFromExcel();
-  const updatedBy = displayName(currentUserUpn);
-  const subject = `Call Up Request Completed: ${selectedId} - ${order.Event}`;
-  const body = `<h2>Call Up Request Completed</h2>
-     <p><strong>Order ID:</strong> ${escHtml(selectedId)}</p>
-     <p><strong>Event:</strong> ${escHtml(order.Event)}</p>
-     <p><strong>Start Date:</strong> ${escHtml(order.StartDate)}</p>
-     <p><strong>End Date:</strong> ${escHtml(order.EndDate)}</p>
-     <p><strong>Meeting Location:</strong> ${escHtml(order.Location)}</p>
-     <p><strong>Guards:</strong> ${escHtml(order.NumGuards)}</p>
-     ${dutiesListHtml(order.Duties)}
-     <p><strong>Marked completed by:</strong> ${escHtml(updatedBy)}</p>
-     <p>This temporary post order has been marked completed.</p>`;
-  for (const recipient of NOTIFY_RECIPIENTS) {
-    await sendEmail(recipient, subject, body);
-  }
+  // Re-find from the reloaded list so any just-saved revision PDF is attached
+  // to the orders@ copy when the routing switch is on.
+  const fresh = orders.find(o => o.OrderID === selectedId) || order;
+  await notifyCompleted(fresh);
   await selectOrder(selectedId);
 }
 
@@ -1435,8 +1490,8 @@ async function addExtractedOrder() {
        <p><strong>Site Contact:</strong> ${escHtml(newOrder.SiteContact)}</p>
        ${dutiesListHtml(newOrder.Duties)}
        <p><strong>Uploaded by:</strong> ${escHtml(displayName(currentUserUpn))}</p>`;
-    for (const recipient of NOTIFY_RECIPIENTS) {
-      await sendEmail(recipient, newSubject, newBody, newOrder.PDFFilename);
+    for (const t of notifyTargets("new", "Pending", newOrder.PDFFilename)) {
+      await sendEmail(t.to, newSubject, newBody, t.attach);
     }
 
     document.getElementById("extractedCard").style.display = "none";
@@ -1451,6 +1506,138 @@ async function addExtractedOrder() {
 
 function cancelExtracted() {
   document.getElementById("extractedCard").style.display = "none";
+  window.reviseTargetId = null;
+  window.uploadedPDFFile = null;
+  window.extractedData = null;
+  _setUploadCardMode(null);
+}
+
+// ── Revised post-order upload ───────────────────────────────────────────
+// Reuses the create review card (#uploadCard / #extractedCard). A
+// window.reviseTargetId flag, set when the user clicks "Upload Revised PDF" on
+// an order, routes the shared confirm button to saveRevisedOrder() instead of
+// addExtractedOrder(), and relabels the card so the mode is unmistakable.
+function _setUploadCardMode(reviseOrderId, nextVersion) {
+  const title = document.getElementById("uploadCardTitle");
+  const btn = document.getElementById("confirmExtractedBtn");
+  if (reviseOrderId) {
+    if (title) title.innerHTML = '&#x1F4C4; Upload a REVISED Post Order for ' + escHtml(reviseOrderId);
+    if (btn) btn.innerHTML = '&#x2713; Save Revision (V' + nextVersion + ')';
+  } else {
+    if (title) title.innerHTML = '&#x1F4C4; Upload a Temporary Post Order PDF';
+    if (btn) btn.innerHTML = '&#x2795; Add to Order List';
+  }
+}
+
+function startReviseUpload() {
+  if (!selectedId) return;
+  const order = orders.find(o => o.OrderID === selectedId);
+  if (!order) return;
+  const next = (Number(order.Version) || 1) + 1;
+  window.reviseTargetId = selectedId;
+  window.extractedData = null;
+  window.uploadedPDFFile = null;
+  document.getElementById("extractedCard").style.display = "none";
+  const card = document.getElementById("uploadCard");
+  card.style.display = "block";
+  _setUploadCardMode(selectedId, next);
+  card.scrollIntoView({ behavior: "smooth" });
+}
+
+// Shared confirm button on the review card: create vs revise.
+function confirmExtracted() {
+  return window.reviseTargetId ? saveRevisedOrder() : addExtractedOrder();
+}
+
+async function saveRevisedOrder() {
+  const targetId = window.reviseTargetId;
+  if (!targetId) return addExtractedOrder();
+  if (!window.extractedData) {
+    alert("Please upload the revised PDF first — the fields haven't been extracted yet.");
+    return;
+  }
+  if (!window.uploadedPDFFile) {
+    alert("No revised PDF selected. Please choose the revised post-order PDF file.");
+    return;
+  }
+  const order = orders.find(o => o.OrderID === targetId);
+  if (!order) { alert("Order " + targetId + " not found."); return; }
+  const prev = Number(order.Version) || 1;
+  const next = prev + 1;
+  const author = displayName(currentUserUpn);
+
+  // Read the (reviewed) extracted values and diff against the current order so
+  // the change-notification can show what changed. Same ef_* inputs as create.
+  const fieldMap = {
+    ef_event: "Event", ef_startDate: "StartDate", ef_endDate: "EndDate",
+    ef_startTime: "StartTime", ef_endTime: "EndTime", ef_numGuards: "NumGuards",
+    ef_meetingLocation: "Location", ef_siteContact: "SiteContact",
+    ef_contactNumber: "ContactNumber", ef_days: "Days", ef_coverage: "Coverage",
+    ef_ppe: "PPERequired", ef_duties: "Duties",
+  };
+  const fieldUpdate = {};
+  const changes = [];
+  for (const [inputId, fieldName] of Object.entries(fieldMap)) {
+    const el = document.getElementById(inputId);
+    if (!el) continue;
+    const newVal = String(el.value || "").trim();
+    fieldUpdate[fieldName] = newVal;
+    const oldVal = String(order[fieldName] || "").trim();
+    if (newVal !== oldVal) changes.push({ field: fieldName, oldVal, newVal });
+  }
+
+  try {
+    showLoading("Uploading revised PDF...");
+    const filename = targetId + "_v" + next + "_" + strictSafeName(window.uploadedPDFFile.name);
+    const ab = await window.uploadedPDFFile.arrayBuffer();
+    // A revision MUST carry a PDF — unlike create, if the upload fails we abort
+    // the whole revision rather than bump the version with no file behind it.
+    const up = await apiJson(`/pdf/${encodeURIComponent(filename)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/pdf" },
+      body: ab,
+    });
+    fieldUpdate.PDFFilename = up.filename || filename;
+    fieldUpdate.Version = next;
+
+    showLoading("Saving revision...");
+    await apiJson(`/orders/${encodeURIComponent(targetId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fields: fieldUpdate, note: "Post order revised to V" + next }),
+    });
+  } catch (e) {
+    hideLoading();
+    console.error("saveRevisedOrder error:", e);
+    alert("Couldn't save the revision: " + e.message + "\nThe order was not changed.");
+    return;
+  }
+  await loadDataFromExcel();
+  hideLoading();
+
+  // Edit-style change notification, routed through the shared layer (so it
+  // follows the order's current status basket once the switch is on).
+  const summary = changes.length
+    ? changes.map(c => `<li><strong>${escHtml(c.field)}:</strong> "${escAttr(c.oldVal)}" → "${escAttr(c.newVal)}"</li>`).join("")
+    : "<li>No field values changed (new PDF attached).</li>";
+  const subject = `Call Up Request Changed: ${targetId} — ${order.Event || ''} (Revised V${next})`;
+  const body = `<h2>Call Up Request Revised (V${next})</h2>
+     <p><strong>Order ID:</strong> ${escHtml(targetId)}</p>
+     <p><strong>Event:</strong> ${escHtml(order.Event || '')}</p>
+     <p><strong>Revised by:</strong> ${escHtml(author)}</p>
+     <p>A revised temporary post order (V${next}) was uploaded. Changes:</p>
+     <ul>${summary}</ul>`;
+  for (const t of notifyTargets("edit", order.Status)) {
+    await sendEmail(t.to, subject, body, t.attach);
+  }
+
+  // Reset the shared card back to create mode and reopen the order.
+  document.getElementById("extractedCard").style.display = "none";
+  window.reviseTargetId = null;
+  window.uploadedPDFFile = null;
+  window.extractedData = null;
+  _setUploadCardMode(null);
+  await selectOrder(targetId);
 }
 
 // ─────────────────────────────────────────────────────────────────────

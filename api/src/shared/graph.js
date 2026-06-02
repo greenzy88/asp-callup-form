@@ -110,7 +110,7 @@ const ORDERS_HEADERS = [
   "OrderID","Event","StartDate","EndDate","StartTime","EndTime",
   "Days","Coverage","NumGuards","Location","SiteContact",
   "ContactNumber","PPERequired","Duties","Status",
-  "UpdatedBy","LastUpdated","Archived","PDFFilename",
+  "UpdatedBy","LastUpdated","Archived","PDFFilename","Version",
 ];
 const HISTORY_HEADERS = ["OrderID","Status","ChangedBy","Timestamp","Notes"];
 
