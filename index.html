@@ -594,6 +594,27 @@ function hideLoading() {
 function loginPopup() {
   if (!msalInstance) { alert("MSAL not ready"); return; }
   msalInstance.loginPopup(loginRequest).then(async response => {
+    // 2026-06-08 — Tenant guard (defense-in-depth, Council verify forum).
+    // loginHint/domainHint only STEER the picker; they don't CONTRACT the result.
+    // If the user lands on a non-ASP account (Edge multi-profile, auto-pick, or a
+    // stale cached account MSAL surfaces), committing it here would proceed into a
+    // cryptic backend 401 (api/src/shared/auth.js rejects foreign tid). Instead,
+    // reject loudly, wipe MSAL cache so the wrong account can't linger in the next
+    // picker, and let the user re-pick. This also closes any residual "loginPopup
+    // consulted a cached /common account" path: a wrong tid never gets committed.
+    const _acct = response.account || {};
+    const _tid = String(_acct.tenantId || (_acct.idTokenClaims && _acct.idTokenClaims.tid) || "").toLowerCase();
+    if (_tid !== ASP_TENANT_ID.toLowerCase()) {
+      try {
+        Object.keys(localStorage)
+          .filter(k => /(^|\.)msal\.|47a13aa4-d214-4987-a6c8-472cc0161f67/i.test(k))
+          .forEach(k => localStorage.removeItem(k));
+      } catch (_) {}
+      try { msalInstance.setActiveAccount(null); } catch (_) {}
+      alert("Please sign in with your ASP account (atraining@security-asp.com). " +
+            "The account you selected belongs to a different organization and can't access this app.");
+      return;
+    }
     msalInstance.setActiveAccount(response.account);
     idToken = response.idToken;
     currentUserUpn = response.account.username || "";
