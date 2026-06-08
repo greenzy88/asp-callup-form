@@ -297,7 +297,7 @@
           <h6 class="fw-bold mb-3" style="color:var(--asp-blue)">&#x2713; Extracted Fields — review before saving</h6>
           <div id="extractedFields"></div>
           <div class="d-flex gap-2 mt-3">
-            <button class="btn btn-sm btn-success" id="confirmExtractedBtn" onclick="confirmExtracted()">&#x2795; Add to Order List</button>
+            <button class="btn btn-sm btn-success" id="confirmExtractedBtn" onclick="confirmExtracted()">&#x2795; Submit</button>
             <button class="btn btn-sm btn-outline-secondary" onclick="cancelExtracted()">Cancel</button>
           </div>
         </div>
@@ -997,7 +997,7 @@ function selectOrder(id) {
       : '';
     headerHtml = isEditingFields
       ? `<div class="d-flex gap-2 mb-3 flex-wrap">
-           <button class="btn btn-sm" style="background:var(--asp-blue);color:#fff" onclick="saveFieldChanges()">&#x2713; Save Changes</button>
+           <button class="btn btn-sm" style="background:var(--asp-blue);color:#fff" onclick="saveFieldChanges()">&#x2713; Submit Revision</button>
            <button class="btn btn-sm btn-outline-secondary" onclick="cancelFieldChanges()">Cancel</button>
          </div>`
       : `<div class="d-flex gap-2 mb-3 flex-wrap">
@@ -1619,7 +1619,7 @@ function _setUploadCardMode(reviseOrderId, nextVersion) {
     if (btn) btn.innerHTML = '&#x2713; Save Revision (V' + nextVersion + ')';
   } else {
     if (title) title.innerHTML = '&#x1F4C4; Upload a Temporary Post Order PDF';
-    if (btn) btn.innerHTML = '&#x2795; Add to Order List';
+    if (btn) btn.innerHTML = '&#x2795; Submit';
   }
 }
 
