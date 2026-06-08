@@ -484,10 +484,22 @@ function strictSafeName(name) {
   return base.slice(0, 150) + '.pdf';
 }
 
+// 2026-06-08 — Tenant-pin the login to ASP (security-asp.com), NOT /common.
+// WHY: the app's only valid login is the shared ASP account
+// atraining@security-asp.com, but BBTCA clients sign in from a browser with a
+// live Toronto Port Authority (TPA) M365 session. With /common, Microsoft does
+// Home-Realm Discovery off that session and auto-routes the popup to the TPA
+// tenant — forcing the client to "Use another account" and retype the ASP login.
+// A tenant-SPECIFIC authority path (/{ASP_TENANT_GUID}/...) is served by the ASP
+// tenant directly: a tenant-pinned /authorize request CANNOT be redirected to
+// TPA's endpoint, so TPA routing becomes structurally impossible. The GUID below
+// is the ASP tenant (resolved from the public OIDC discovery for security-asp.com)
+// and exactly matches the issuer the backend already pins in api/src/shared/auth.js.
+const ASP_TENANT_ID = "0dff3239-8d56-4fa4-bbb2-f6ce4401cfaf";
 const msalConfig = {
   auth: {
     clientId: "47a13aa4-d214-4987-a6c8-472cc0161f67",
-    authority: "https://login.microsoftonline.com/common",
+    authority: "https://login.microsoftonline.com/" + ASP_TENANT_ID,
     redirectUri: window.location.href.split('?')[0]
   },
   cache: { cacheLocation: "localStorage", storeAuthStateInCookie: false }
@@ -498,7 +510,20 @@ const msalConfig = {
 // an ID token; the backend validates the ID token (audience=clientId)
 // and does all Graph work as the OWNER via a stored refresh token.
 // No per-user Graph scopes; openid+profile+email are auto-granted.
-const loginRequest = { scopes: ["openid", "profile", "email"] };
+// 2026-06-08 — Steer the interactive login straight to the ASP tenant:
+//   domainHint   — skips Entra's email-discovery/account-chooser and routes
+//                  directly to the security-asp.com tenant login.
+//   loginHint    — pre-fills the shared ASP username so the client doesn't type it.
+//   prompt:select_account — forces an account choice instead of silently reusing
+//                  the browser's live TPA SSO session. NOT "login" (that would
+//                  force a fresh password every visit for this daily-use shared
+//                  account); NOT omitted (that risks silent TPA SSO reuse).
+const loginRequest = {
+  scopes: ["openid", "profile", "email"],
+  domainHint: "security-asp.com",
+  loginHint: "atraining@security-asp.com",
+  prompt: "select_account"
+};
 
 let msalInstance, idToken = null;
 let currentUserUpn = "";
