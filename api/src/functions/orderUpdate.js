@@ -41,20 +41,28 @@ app.http("orderUpdate", {
       const ts = new Date();
       const before = orderRows[idx];
 
-      // Managers + owner can change any status. Clients (canEdit but not
-      // canManageStatus) can ONLY (a) mark an order Completed as a single-field
-      // Status change, or (b) upload a revised post order — a PATCH that bumps
-      // Version and does NOT change Status. Either way a client cannot set an
-      // arbitrary status (Pending/Scheduled) or smuggle a status change into a
-      // revision. (Order is loaded first so the revision check can read
-      // before.Version; auth + submitter token already ran above.)
+      // # council-verified:panel-council_callup_rereview_bump-1780978064
+      // 2026-06-09 — Clients (canEdit but not canManageStatus) may now edit
+      // CONTENT fields freely (field edits + PDF revisions) AND may set Status
+      // ONLY to "Completed" as a sole-field change. They may NOT set Pending or
+      // Scheduled — that stays a manager action. A client revision can still send
+      // a Scheduled order back to Pending, but that is applied SERVER-SIDE by the
+      // re-review bump below, never from a client-supplied Status value. The
+      // status check is case-insensitive: writeSheet is header-bound (only the
+      // canonical "Status" column persists) so a mis-cased key is inert, but we
+      // reject it explicitly so the rule is unambiguous.
       if (!canManageStatus(upn)) {
+        if (!canEdit(upn)) {
+          return { status: 403, jsonBody: { error: "Not authorised to edit this order" } };
+        }
         const fieldKeys = Object.keys(fields);
-        const isCompletedOnly = fieldKeys.length === 1 && fields.Status === "Completed";
-        const isRevision = !("Status" in fields) &&
-          (Number(fields.Version) || 0) > (Number(before.Version) || 1);
-        if (!canEdit(upn) || !(isCompletedOnly || isRevision)) {
-          return { status: 403, jsonBody: { error: "Only managers can update order status" } };
+        const statusKeys = fieldKeys.filter((k) => k.toLowerCase() === "status");
+        if (statusKeys.length) {
+          const completedOnly =
+            fieldKeys.length === 1 && statusKeys[0] === "Status" && fields.Status === "Completed";
+          if (!completedOnly) {
+            return { status: 403, jsonBody: { error: "Only managers can set the order status" } };
+          }
         }
       }
       const after = Object.assign({}, before, fields, {
@@ -92,12 +100,34 @@ app.http("orderUpdate", {
       // dropped silently.
       const hasNote = !!(body.note && String(body.note).trim());
 
+      // 2026-06-09 — Re-review bump. When a CLIENT revises a SCHEDULED order
+      // (a content field edit OR a PDF/version revision — NOT a pure status
+      // change), reset it to Pending so the change is re-reviewed/re-approved.
+      // Manager edits never bump (managers are the approvers). Completed orders
+      // are UI-locked from client edits and are excluded here too (only
+      // before.Status === "Scheduled" triggers it). Applied server-side, so it
+      // neither relies on nor violates the client status-set restriction above.
+      // NOTE (accepted, pre-existing): this handler is read-modify-write on the
+      // workbook with only a row-count anti-wipe guard, so a bump racing a
+      // simultaneous manager approval is theoretically possible. Probability is
+      // negligible for this small internal app; true fix = optimistic locking
+      // (rowVersion CAS), a separate architectural change.
+      const isClientActor = !canManageStatus(upn);
+      const isContentRevision = nonStatusChanges.length > 0 || isRevision;
+      let revertedToPending = false;
+      if (isClientActor && isContentRevision && !statusChange && before.Status === "Scheduled") {
+        after.Status = "Pending";
+        revertedToPending = true;
+      }
+
       if (statusChange || nonStatusChanges.length || hasNote) {
         const noteParts = [];
         // 2026-06-08 — record the order's status at the time of this edit so the
         // history shows what state the order was in when it was revised/edited.
         // For a pure status change the label already names the new status, so skip.
-        if (!statusChange) noteParts.push(`Status at edit: ${after.Status || before.Status || "—"}`);
+        if (!statusChange) noteParts.push(revertedToPending
+          ? `Status reset for re-review: ${before.Status} → Pending`
+          : `Status at edit: ${after.Status || before.Status || "—"}`);
         if (body.note) noteParts.push(body.note);
         if (nonStatusChanges.length) {
           noteParts.push(
