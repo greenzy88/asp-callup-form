@@ -94,6 +94,10 @@ app.http("orderUpdate", {
 
       if (statusChange || nonStatusChanges.length || hasNote) {
         const noteParts = [];
+        // 2026-06-08 — record the order's status at the time of this edit so the
+        // history shows what state the order was in when it was revised/edited.
+        // For a pure status change the label already names the new status, so skip.
+        if (!statusChange) noteParts.push(`Status at edit: ${after.Status || before.Status || "—"}`);
         if (body.note) noteParts.push(body.note);
         if (nonStatusChanges.length) {
           noteParts.push(
@@ -105,8 +109,8 @@ app.http("orderUpdate", {
           Status: statusChange
             ? statusChange.to
             : isRevision
-              ? `Revised (V${verAfter})`
-              : (nonStatusChanges.length ? "Edited" : before.Status),
+              ? `Submission Revised (V${verAfter})`
+              : (nonStatusChanges.length ? "Submission Revised" : before.Status),
           ChangedBy: actor,
           Timestamp: ts.toLocaleString("en-US", { timeZone: "America/Toronto" }),
           Notes: noteParts.join(" | "),
