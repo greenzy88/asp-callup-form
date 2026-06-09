@@ -10,8 +10,13 @@ name: Auto-status cron
 # months, re-enable the schedule (Actions tab) or push any commit.
 
 on:
-  schedule:
-    - cron: "*/15 * * * *"   # every 15 minutes (UTC)
+  # SCHEDULE DISABLED 2026-06-09 — this GitHub-Actions cron emailed David a failure
+  # notice every tick because the Azure SWA had no CRON_SECRET app setting, so
+  # /api/cron returned 503 on every ping. Scheduling is being migrated OFF GitHub
+  # Actions (no inbox spam on failure). Left manual-only so the endpoint can still
+  # be exercised from the Actions tab if needed.
+  # schedule:
+  #   - cron: "*/15 * * * *"   # every 15 minutes (UTC)
   workflow_dispatch: {}       # allow manual runs from the Actions tab
 
 permissions:
