@@ -26,6 +26,12 @@ app.http("orderUpdate", {
       if (!fields || typeof fields !== "object") {
         return { status: 400, jsonBody: { error: "Body.fields must be an object" } };
       }
+      // 2026-06-09 — reject prototype-pollution keys outright. writeSheet is
+      // header-bound so these never persist, but rejecting is unambiguous and
+      // keeps Object.assign(after, fields) from touching the prototype chain.
+      if (Object.keys(fields).some((k) => k === "__proto__" || k === "constructor" || k === "prototype")) {
+        return { status: 400, jsonBody: { error: "Invalid field key" } };
+      }
       const itemId = await workbookItemId();
       const [orders, history] = await Promise.all([
         readSheet(itemId, "Orders"),
