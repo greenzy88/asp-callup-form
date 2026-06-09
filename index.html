@@ -1244,21 +1244,57 @@ async function saveFieldChanges() {
   }
   await loadDataFromExcel();
 
-  // Build the change summary, then notify via the shared routing layer below.
-  const summary = changes
-    .map(c => {
-      const dv = v => (c.field === "StartDate" || c.field === "EndDate") ? fmtDateDisplay(v) : v;
-      return `<li><strong>${c.field}:</strong> "${escAttr(dv(c.oldVal))}" → "${escAttr(dv(c.newVal))}"</li>`;
-    })
-    .join("");
+  // # council-verified:panel-council_callup_changed_email_redesign-1780962809
+  // 2026-06-08 — Show the FULL post order (every field, like the New/Scheduled
+  // email) and HIGHLIGHT the changed fields, instead of a bare diff list.
+  // `order` already holds the post-edit values (mutated in the loop above), and
+  // the field keys below exactly match api graph.js ORDERS_HEADERS + the edit
+  // fieldMap. Duties render via dutiesListHtml as a <ul> (one bullet per line).
+  // Highlight uses a TABLE with the bgcolor ATTRIBUTE on <tr> (+ inline bg on the
+  // <td>): Outlook's Word engine strips background/border-left from a <p> but DOES
+  // honor <tr bgcolor>, so changed rows stay visibly highlighted (Council R1).
+  const chg = {};
+  changes.forEach(c => { chg[c.field] = c; });
+  const _dispVal = (field, val) =>
+    (field === "StartDate" || field === "EndDate") ? fmtDateDisplay(val) : (val || "");
+  const TD = "padding:5px 10px;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;";
+  const TD_HI = TD + "background:#fff3cd;border-left:4px solid #f0ad4e;";
+  const fieldRow = (label, field) => {
+    const cur = _dispVal(field, order[field]);
+    const c = chg[field];
+    if (!c) return `<tr><td style="${TD}"><strong>${escHtml(label)}:</strong> ${escHtml(cur)}</td></tr>`;
+    const was = _dispVal(field, c.oldVal);
+    return `<tr bgcolor="#fff3cd"><td style="${TD_HI}"><strong>${escHtml(label)}:</strong> ${escHtml(cur)} ` +
+           `<span style="color:#8a6d3b;font-size:12px;">(changed from "${escHtml(was)}")</span></td></tr>`;
+  };
+  const dutiesRow = () => {
+    const list = dutiesListHtml(order.Duties) || '<strong>Duties:</strong> —';
+    if (!chg["Duties"]) return `<tr><td style="${TD}">${list}</td></tr>`;
+    return `<tr bgcolor="#fff3cd"><td style="${TD_HI}">${list}` +
+           `<div style="color:#8a6d3b;font-size:12px;margin-top:4px;">(Duties changed)</div></td></tr>`;
+  };
   const subject = `Call Up Request Changed: ${selectedId} — ${order.Event || ''}`;
-  const body = `<h2>Call Up Request Changed</h2>
-     <p><strong>Order ID:</strong> ${selectedId}</p>
-     <p><strong>Event:</strong> ${order.Event || ''}</p>
-     <p><strong>Edited by:</strong> ${author}</p>
-     <p><strong>Timestamp:</strong> ${ts}</p>
-     <p><strong>Changes:</strong></p>
-     <ul>${summary}</ul>`;
+  const body = `<h2 style="font-family:Arial,Helvetica,sans-serif;">Call Up Request Changed</h2>
+     <p style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#555;">This post order was revised. Changed fields are highlighted in yellow.</p>
+     <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;max-width:640px;">
+       ${fieldRow("Order ID", "OrderID")}
+       ${fieldRow("Event", "Event")}
+       ${fieldRow("Start Date", "StartDate")}
+       ${fieldRow("End Date", "EndDate")}
+       ${fieldRow("Start Time", "StartTime")}
+       ${fieldRow("End Time", "EndTime")}
+       ${fieldRow("Days", "Days")}
+       ${fieldRow("Coverage", "Coverage")}
+       ${fieldRow("Guards", "NumGuards")}
+       ${fieldRow("Meeting Location", "Location")}
+       ${fieldRow("Site Contact", "SiteContact")}
+       ${fieldRow("Phone", "ContactNumber")}
+       ${fieldRow("PPE", "PPERequired")}
+       ${dutiesRow()}
+     </table>
+     <hr style="border:none;border-top:1px solid #ddd;margin:12px 0;max-width:640px;">
+     <p style="font-family:Arial,Helvetica,sans-serif;font-size:14px;margin:4px 0;"><strong>Edited by:</strong> ${escHtml(author)}</p>
+     <p style="font-family:Arial,Helvetica,sans-serif;font-size:14px;margin:4px 0;"><strong>Timestamp:</strong> ${escHtml(ts)}</p>`;
   // Routed through the shared notification layer (switch-gated). While the
   // switch is OFF this is the admin only, no attachment — as before.
   for (const t of notifyTargets("edit", order.Status)) {
