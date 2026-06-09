@@ -111,6 +111,10 @@ const ORDERS_HEADERS = [
   "Days","Coverage","NumGuards","Location","SiteContact",
   "ContactNumber","PPERequired","Duties","Status",
   "UpdatedBy","LastUpdated","Archived","PDFFilename","Version",
+  // 2026-06-09 — auto-status engine idempotency flags (cronTick.js). Appended at
+  // the END so existing column positions never shift; blank on existing rows
+  // (read as "not yet sent"), populated on first write.
+  "NotifiedStartingSoon","NotifiedExpiry","AutoCompleted",
 ];
 const HISTORY_HEADERS = ["OrderID","Status","ChangedBy","Timestamp","Notes"];
 

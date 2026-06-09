@@ -1,0 +1,40 @@
+name: Auto-status cron
+
+# Pings the /api/cron endpoint on a schedule so the time-based auto-status engine
+# can run (Azure SWA managed functions are HTTP-only and can't self-schedule).
+# The endpoint is idempotent + catch-up, so a delayed or skipped slot just
+# delivers slightly later — never duplicates or misses.
+#
+# NOTE: GitHub disables scheduled workflows after 60 days with NO repo commits.
+# This repo gets commits whenever the app changes; if it ever goes quiet for ~2
+# months, re-enable the schedule (Actions tab) or push any commit.
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"   # every 15 minutes (UTC)
+  workflow_dispatch: {}       # allow manual runs from the Actions tab
+
+permissions:
+  contents: read
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /api/cron
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::CRON_SECRET repo secret is not set"; exit 1
+          fi
+          code=$(curl -sS -o /tmp/cron_out.txt -w "%{http_code}" \
+            --max-time 120 -X POST \
+            -H "x-cron-secret: $CRON_SECRET" \
+            "https://delightful-bay-0e217b31e.7.azurestaticapps.net/api/cron")
+          echo "HTTP $code"
+          cat /tmp/cron_out.txt || true
+          echo
+          if [ "$code" != "200" ]; then
+            echo "::error::cron tick returned HTTP $code"; exit 1
+          fi

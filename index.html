@@ -987,7 +987,9 @@ function selectOrder(id) {
     // "Mark as Completed" is open to anyone with edit rights, including
     // clients, per David 2026-05-27. Other status transitions remain
     // gated to managers via the right-side Update Status form.
-    const markCompletedBtn = (!isEditingFields && o.Status !== "Completed" && !isManager)
+    // 2026-06-09 — clients can no longer set ANY status; "Completed" is now
+    // manager-only (via the right-side Update Status form). Button disabled.
+    const markCompletedBtn = (false)
       ? `<button class="btn btn-sm" style="background:var(--asp-blue);color:#fff" onclick="markCompleted()">&#x2713; Mark as Completed</button>`
       : '';
     // Upload Revised PDF — open to anyone with edit rights (admin + client),

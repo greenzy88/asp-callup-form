@@ -47,28 +47,19 @@ app.http("orderUpdate", {
       const ts = new Date();
       const before = orderRows[idx];
 
-      // # council-verified:panel-council_callup_rereview_bump-1780978064
-      // 2026-06-09 — Clients (canEdit but not canManageStatus) may now edit
-      // CONTENT fields freely (field edits + PDF revisions) AND may set Status
-      // ONLY to "Completed" as a sole-field change. They may NOT set Pending or
-      // Scheduled — that stays a manager action. A client revision can still send
-      // a Scheduled order back to Pending, but that is applied SERVER-SIDE by the
-      // re-review bump below, never from a client-supplied Status value. The
-      // status check is case-insensitive: writeSheet is header-bound (only the
-      // canonical "Status" column persists) so a mis-cased key is inert, but we
-      // reject it explicitly so the rule is unambiguous.
+      // # council-verified:panel-council_callup_autostatus_engine-1780981731
+      // 2026-06-09 — Clients (canEdit but not canManageStatus) may edit CONTENT
+      // fields, add notes, and upload a revised PDF — but may NOT set ANY status
+      // (Completed included; setting status is a manager-only action via the
+      // status dropdown). Reject any status key, case-insensitive. A client
+      // revision can still send a Scheduled order back to Pending, but that is
+      // applied SERVER-SIDE by the re-review bump below, never from a client value.
       if (!canManageStatus(upn)) {
         if (!canEdit(upn)) {
           return { status: 403, jsonBody: { error: "Not authorised to edit this order" } };
         }
-        const fieldKeys = Object.keys(fields);
-        const statusKeys = fieldKeys.filter((k) => k.toLowerCase() === "status");
-        if (statusKeys.length) {
-          const completedOnly =
-            fieldKeys.length === 1 && statusKeys[0] === "Status" && fields.Status === "Completed";
-          if (!completedOnly) {
-            return { status: 403, jsonBody: { error: "Only managers can set the order status" } };
-          }
+        if (Object.keys(fields).some((k) => k.toLowerCase() === "status")) {
+          return { status: 403, jsonBody: { error: "Only managers can set the order status" } };
         }
       }
       const after = Object.assign({}, before, fields, {
