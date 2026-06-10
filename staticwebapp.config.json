@@ -12,10 +12,6 @@
     {
       "route": "/api/auth/status",
       "allowedRoles": ["anonymous"]
-    },
-    {
-      "route": "/api/cron",
-      "allowedRoles": ["anonymous"]
     }
   ],
   "globalHeaders": {
