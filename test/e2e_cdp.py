@@ -134,20 +134,29 @@ def cmd_login():
     if popup:
         p = Tab(popup["webSocketDebuggerUrl"])
         p.cmd("Runtime.enable")
-        # account picker: click the dramlagan tile if present
+        # Account picker: the dramlagan tile is <div role=button
+        # data-test-id="dramlagan@security-asp.com">. A JS .click() does NOT
+        # trigger MSAL's handler — it needs a TRUSTED mouse event, so we
+        # dispatch a real Input.dispatchMouseEvent at the tile's center.
         for _ in range(20):
             time.sleep(1.5)
-            res = p.js("""(() => {
-              const tiles = [...document.querySelectorAll('div[data-test-id], .table[role=button], .tile, div.row.tile')];
-              const txt = document.body ? document.body.innerText.slice(0, 400) : '';
-              const tile = [...document.querySelectorAll('small,div')].find(e =>
-                /dramlagan@security-asp\\.com|atraining@security-asp\\.com/i.test(e.textContent||'') );
-              if (tile) { (tile.closest('[role=button]')||tile.closest('.table')||tile.closest('div.row')||tile).click(); return 'clicked:'+tile.textContent.trim().slice(0,60); }
-              return 'waiting: ' + txt.replace(/\\n+/g,' | ').slice(0,200);
+            box = p.js("""(() => {
+              const el = document.querySelector('[data-test-id="dramlagan@security-asp.com"]')
+                      || [...document.querySelectorAll('[data-test-id]')].find(e =>
+                           /security-asp\\.com/i.test(e.getAttribute('data-test-id')||''));
+              if (!el) return null;
+              const r = el.getBoundingClientRect();
+              return {x: r.left + r.width/2, y: r.top + r.height/2};
             })()""", await_promise=False)
-            print("  popup:", res)
-            if res and res.startswith("clicked"):
+            if box:
+                for typ in ("mousePressed", "mouseReleased"):
+                    p.cmd("Input.dispatchMouseEvent", type=typ, x=box["x"],
+                          y=box["y"], button="left", clickCount=1, buttons=1)
+                print("  popup: trusted-clicked dramlagan tile")
                 break
+            txt = p.js("document.body ? document.body.innerText.slice(0,160) : ''",
+                       await_promise=False)
+            print("  popup waiting:", (txt or "").replace("\n", " | ")[:120])
         p.close()
     # wait for app to land signed-in
     for _ in range(30):

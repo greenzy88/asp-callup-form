@@ -476,6 +476,18 @@ function toISODate(s) {
            if (i >= 0) return `${m[3]}-${String(i+1).padStart(2,"0")}-${String(m[1]).padStart(2,"0")}`; }
   return str;                                  // unparseable (e.g. "See PDF") — preserve verbatim
 }
+// 2026-06-11 (David stress test) — Excel coerces a stored "0900" to the number
+// 900 on round-trip, dropping the leading zero, so a RELOADED order rendered
+// "Start Time: 900" in the emails/UI (the New email looked fine only because it
+// used the in-memory extracted "0900" before the Excel save). Pad times back to
+// the 4-digit HHMM the post orders use ("900"->"0900", "9:00"->"0900") at every
+// DISPLAY site. Same shape as the revision diff's _normTime, so display ==
+// the value the diff compares against (no spurious "changed" highlight either).
+function fmtTimeDisplay(s) {
+  const str = String(s == null ? "" : s).trim();
+  const m = str.match(/^(\d{1,2}):?(\d{2})$/);
+  return m ? m[1].padStart(2, "0") + m[2] : str;
+}
 
 // Render an order's Duties field as an HTML bullet list for emails. Duties are
 // stored as "• "-prefixed, newline-separated text (see the PDF extraction in
@@ -530,7 +542,9 @@ function changedOrderEmailBody(cur, changes, author, ts, versionNote) {
   const chg = {};
   (changes || []).forEach(c => { chg[c.field] = c; });
   const _dispVal = (field, val) =>
-    (field === "StartDate" || field === "EndDate") ? fmtDateDisplay(val) : (val || "");
+    (field === "StartDate" || field === "EndDate") ? fmtDateDisplay(val)
+    : (field === "StartTime" || field === "EndTime") ? fmtTimeDisplay(val)
+    : (val || "");
   const TD = "padding:5px 10px;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;";
   const TD_HI = TD + "background:#fff3cd;border-left:4px solid #f0ad4e;";
   const fieldRow = (label, field) => {
@@ -943,8 +957,8 @@ async function notifyCompleted(order, note) {
      <p><strong>Event:</strong> ${escHtml(order.Event)}</p>
      <p><strong>Start Date:</strong> ${escHtml(fmtDateDisplay(order.StartDate))}</p>
      <p><strong>End Date:</strong> ${escHtml(fmtDateDisplay(order.EndDate))}</p>
-     <p><strong>Start Time:</strong> ${escHtml(order.StartTime || '')}</p>
-     <p><strong>End Time:</strong> ${escHtml(order.EndTime || '')}</p>
+     <p><strong>Start Time:</strong> ${escHtml(fmtTimeDisplay(order.StartTime))}</p>
+     <p><strong>End Time:</strong> ${escHtml(fmtTimeDisplay(order.EndTime))}</p>
      <p><strong>Days:</strong> ${escHtml(order.Days || '')}</p>
      <p><strong>Coverage:</strong> ${escHtml(order.Coverage || '')}</p>
      <p><strong>Guards:</strong> ${escHtml(order.NumGuards)}</p>
@@ -1009,7 +1023,7 @@ function renderTable() {
       <td><strong>${escHtml(o.OrderID)}</strong></td>
       <td>${escHtml(o.Event)}</td>
       <td>${escHtml(fmtDateDisplay(o.StartDate))}</td>
-      <td>${escHtml(o.StartTime)}${o.EndTime ? '–' + escHtml(o.EndTime) : ''}</td>
+      <td>${escHtml(fmtTimeDisplay(o.StartTime))}${o.EndTime ? '–' + escHtml(fmtTimeDisplay(o.EndTime)) : ''}</td>
       <td style="text-align:center">${escHtml(o.NumGuards)}</td>
       <td>${escHtml(o.SiteContact)}</td>
       <td><span class="badge ${badgeClass(o.Status)}">${escHtml(o.Status)}</span></td>
@@ -1017,7 +1031,7 @@ function renderTable() {
   ).join("");
   // Card list rendering (visible only on mobile via CSS)
   document.getElementById("orderCardList").innerHTML = filtered.map(o => {
-    const time = (o.StartTime || '') + (o.EndTime ? '–' + o.EndTime : '');
+    const time = fmtTimeDisplay(o.StartTime) + (o.EndTime ? '–' + fmtTimeDisplay(o.EndTime) : '');
     const meta = [
       o.StartDate ? `&#x1F4C5; ${escHtml(fmtDateDisplay(o.StartDate))}` : '',
       time ? `&#x1F552; ${escHtml(time)}` : '',
@@ -1101,8 +1115,8 @@ function selectOrder(id) {
       editRow("Event",       "edit_event",         o.Event),
       editRow("Start Date",  "edit_startDate",     fmtDateDisplay(o.StartDate)),
       editRow("End Date",    "edit_endDate",       fmtDateDisplay(o.EndDate)),
-      editRow("Start Time",  "edit_startTime",     o.StartTime),
-      editRow("End Time",    "edit_endTime",       o.EndTime),
+      editRow("Start Time",  "edit_startTime",     fmtTimeDisplay(o.StartTime)),
+      editRow("End Time",    "edit_endTime",       fmtTimeDisplay(o.EndTime)),
       editRow("Days",        "edit_days",          o.Days),
       editRow("Coverage",    "edit_coverage",      o.Coverage),
       editRow("Guards",      "edit_numGuards",     o.NumGuards),
@@ -1126,8 +1140,8 @@ function selectOrder(id) {
       row("Event", o.Event),
       row("Start Date", fmtDateDisplay(o.StartDate)),
       row("End Date", o.EndDate && o.EndDate !== o.StartDate ? fmtDateDisplay(o.EndDate) : ''),
-      row("Start Time", o.StartTime),
-      row("End Time", o.EndTime),
+      row("Start Time", fmtTimeDisplay(o.StartTime)),
+      row("End Time", fmtTimeDisplay(o.EndTime)),
       row("Days", o.Days),
       row("Coverage", o.Coverage),
       row("Guards", o.NumGuards),
@@ -1290,9 +1304,18 @@ async function saveFieldChanges() {
     // untouched date doesn't register as a spurious change (and so the value
     // we persist stays canonical ISO).
     let newVal = String(el.value || "").trim();
-    if (fieldName === "StartDate" || fieldName === "EndDate") newVal = toISODate(newVal);
+    const isDate = fieldName === "StartDate" || fieldName === "EndDate";
+    // 2026-06-11 — the edit form now prefills times via fmtTimeDisplay ("0900"),
+    // but Excel round-trips storage to "900". Normalize times on BOTH sides
+    // before comparing (and store the padded form) so re-saving an untouched
+    // time doesn't register as a spurious change — same fix as the date path
+    // and the PDF-revision diff.
+    const isTime = fieldName === "StartTime" || fieldName === "EndTime";
+    if (isDate) newVal = toISODate(newVal);
+    else if (isTime) newVal = fmtTimeDisplay(newVal);
     const oldVal = String(order[fieldName] || "").trim();
-    if (newVal !== oldVal) {
+    const oldCmp = isTime ? fmtTimeDisplay(oldVal) : oldVal;
+    if (newVal !== oldCmp) {
       changes.push({ field: fieldName, oldVal, newVal });
       order[fieldName] = newVal;
     }
@@ -1385,8 +1408,8 @@ async function updateStatus() {
        <p><strong>Event:</strong> ${escHtml(order.Event)}</p>
        <p><strong>Start Date:</strong> ${escHtml(fmtDateDisplay(order.StartDate))}</p>
        <p><strong>End Date:</strong> ${escHtml(fmtDateDisplay(order.EndDate))}</p>
-       <p><strong>Start Time:</strong> ${escHtml(order.StartTime || '')}</p>
-       <p><strong>End Time:</strong> ${escHtml(order.EndTime || '')}</p>
+       <p><strong>Start Time:</strong> ${escHtml(fmtTimeDisplay(order.StartTime))}</p>
+       <p><strong>End Time:</strong> ${escHtml(fmtTimeDisplay(order.EndTime))}</p>
        <p><strong>Days:</strong> ${escHtml(order.Days || '')}</p>
        <p><strong>Coverage:</strong> ${escHtml(order.Coverage || '')}</p>
        <p><strong>Guards:</strong> ${escHtml(order.NumGuards)}</p>
@@ -1672,8 +1695,8 @@ async function addExtractedOrder() {
        <p><strong>Event:</strong> ${escHtml(newOrder.Event)}</p>
        <p><strong>Start Date:</strong> ${escHtml(fmtDateDisplay(newOrder.StartDate))}</p>
        <p><strong>End Date:</strong> ${escHtml(fmtDateDisplay(newOrder.EndDate))}</p>
-       <p><strong>Start Time:</strong> ${escHtml(newOrder.StartTime || '')}</p>
-       <p><strong>End Time:</strong> ${escHtml(newOrder.EndTime || '')}</p>
+       <p><strong>Start Time:</strong> ${escHtml(fmtTimeDisplay(newOrder.StartTime))}</p>
+       <p><strong>End Time:</strong> ${escHtml(fmtTimeDisplay(newOrder.EndTime))}</p>
        <p><strong>Days:</strong> ${escHtml(newOrder.Days || '')}</p>
        <p><strong>Coverage:</strong> ${escHtml(newOrder.Coverage || '')}</p>
        <p><strong>Guards:</strong> ${escHtml(newOrder.NumGuards)}</p>
