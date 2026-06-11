@@ -526,7 +526,29 @@ function dutiesListHtml(duties) {
       .map(s => s.trim()).filter(s => s.length > 1);
     if (sentences.length > 1) finalItems = sentences;
   }
-  return '<p style="margin-bottom:4px"><strong>Duties:</strong></p>'
+  // 2026-06-11 (David) — when the duties open with a lead-in clause that ends in
+  // a colon (e.g. "...crowd control... at the Airport as follows:"), render that
+  // clause as an intro line ABOVE the bullets instead of as bullet #1. Guards
+  // (adversarial review wf_eae5f10b) keep the rule from over-firing in a client
+  // email — the lead-in must:
+  //   (a) leave at least TWO real bullets behind (>=3 items total) — a heading
+  //       over a single bullet reads as over-structured, so "Responsibilities:
+  //       Maintain X." stays inline rather than becoming a 1-item list;
+  //   (b) contain an actual word — never promote a bare ":" or stray-punctuation
+  //       fragment (a PDF artifact) to a floating colon paragraph;
+  //   (c) NOT be the literal "Duties:" label the section heading already prints,
+  //       so a duties block that starts "Duties:" doesn't stack two headings.
+  let leadIn = '';
+  if (finalItems.length >= 3
+      && /:\s*$/.test(finalItems[0])
+      && /[A-Za-z]/.test(finalItems[0])
+      && !/^duties\s*:?\s*$/i.test(finalItems[0])) {
+    leadIn = finalItems.shift();
+  }
+  const heading = '<p style="margin-bottom:4px"><strong>Duties:</strong></p>';
+  const leadInHtml = leadIn ? `<p style="margin:0 0 4px 0">${escHtml(leadIn)}</p>` : '';
+  if (!finalItems.length) return heading + leadInHtml;   // lead-in only, no bullets
+  return heading + leadInHtml
     + '<ul style="margin-top:0;padding-left:20px">'
     + finalItems.map(s => `<li>${escHtml(s)}</li>`).join('')
     + '</ul>';
