@@ -943,8 +943,15 @@ async function notifyCompleted(order, note) {
      <p><strong>Event:</strong> ${escHtml(order.Event)}</p>
      <p><strong>Start Date:</strong> ${escHtml(fmtDateDisplay(order.StartDate))}</p>
      <p><strong>End Date:</strong> ${escHtml(fmtDateDisplay(order.EndDate))}</p>
-     <p><strong>Meeting Location:</strong> ${escHtml(order.Location)}</p>
+     <p><strong>Start Time:</strong> ${escHtml(order.StartTime || '')}</p>
+     <p><strong>End Time:</strong> ${escHtml(order.EndTime || '')}</p>
+     <p><strong>Days:</strong> ${escHtml(order.Days || '')}</p>
+     <p><strong>Coverage:</strong> ${escHtml(order.Coverage || '')}</p>
      <p><strong>Guards:</strong> ${escHtml(order.NumGuards)}</p>
+     <p><strong>Meeting Location:</strong> ${escHtml(order.Location)}</p>
+     <p><strong>Site Contact:</strong> ${escHtml(order.SiteContact || '')}</p>
+     <p><strong>Phone:</strong> ${escHtml(order.ContactNumber || '')}</p>
+     <p><strong>PPE:</strong> ${escHtml(order.PPERequired || '')}</p>
      ${dutiesListHtml(order.Duties)}
      <p><strong>Marked completed by:</strong> ${escHtml(updatedBy)}</p>
      ${note ? `<p><strong>Note:</strong> ${escHtml(note)}</p>` : ""}
@@ -1378,8 +1385,15 @@ async function updateStatus() {
        <p><strong>Event:</strong> ${escHtml(order.Event)}</p>
        <p><strong>Start Date:</strong> ${escHtml(fmtDateDisplay(order.StartDate))}</p>
        <p><strong>End Date:</strong> ${escHtml(fmtDateDisplay(order.EndDate))}</p>
-       <p><strong>Meeting Location:</strong> ${escHtml(order.Location)}</p>
+       <p><strong>Start Time:</strong> ${escHtml(order.StartTime || '')}</p>
+       <p><strong>End Time:</strong> ${escHtml(order.EndTime || '')}</p>
+       <p><strong>Days:</strong> ${escHtml(order.Days || '')}</p>
+       <p><strong>Coverage:</strong> ${escHtml(order.Coverage || '')}</p>
        <p><strong>Guards:</strong> ${escHtml(order.NumGuards)}</p>
+       <p><strong>Meeting Location:</strong> ${escHtml(order.Location)}</p>
+       <p><strong>Site Contact:</strong> ${escHtml(order.SiteContact || '')}</p>
+       <p><strong>Phone:</strong> ${escHtml(order.ContactNumber || '')}</p>
+       <p><strong>PPE:</strong> ${escHtml(order.PPERequired || '')}</p>
        ${dutiesListHtml(order.Duties)}
        <p><strong>Updated by:</strong> ${escHtml(updatedBy)}</p>
        <p>Your temporary post order has been scheduled and approved. Please confirm receipt.</p>`;
@@ -1658,9 +1672,15 @@ async function addExtractedOrder() {
        <p><strong>Event:</strong> ${escHtml(newOrder.Event)}</p>
        <p><strong>Start Date:</strong> ${escHtml(fmtDateDisplay(newOrder.StartDate))}</p>
        <p><strong>End Date:</strong> ${escHtml(fmtDateDisplay(newOrder.EndDate))}</p>
+       <p><strong>Start Time:</strong> ${escHtml(newOrder.StartTime || '')}</p>
+       <p><strong>End Time:</strong> ${escHtml(newOrder.EndTime || '')}</p>
+       <p><strong>Days:</strong> ${escHtml(newOrder.Days || '')}</p>
+       <p><strong>Coverage:</strong> ${escHtml(newOrder.Coverage || '')}</p>
        <p><strong>Guards:</strong> ${escHtml(newOrder.NumGuards)}</p>
        <p><strong>Meeting Location:</strong> ${escHtml(newOrder.Location)}</p>
        <p><strong>Site Contact:</strong> ${escHtml(newOrder.SiteContact)}</p>
+       <p><strong>Phone:</strong> ${escHtml(newOrder.ContactNumber || '')}</p>
+       <p><strong>PPE:</strong> ${escHtml(newOrder.PPERequired || '')}</p>
        ${dutiesListHtml(newOrder.Duties)}
        <p><strong>Uploaded by:</strong> ${escHtml(displayName(currentUserUpn))}</p>`;
     for (const t of notifyTargets("new", "Pending", newOrder.PDFFilename)) {
@@ -1757,6 +1777,15 @@ async function saveRevisedOrder() {
   // Fix: canonicalize dates with toISODate before BOTH saving and comparing;
   // compare every field whitespace-normalized.
   const DATE_FIELDS = new Set(["StartDate", "EndDate"]);
+  // 2026-06-11 (David: Start Time falsely highlighted) — Excel drops the leading
+  // zero on save so "0900" comes back as "900", while re-extraction gives
+  // "0900". Same format-only mismatch class as dates. Normalize times to 4-digit
+  // ("900"/"9:00"/"09:00" -> "0900") before storing AND comparing.
+  const TIME_FIELDS = new Set(["StartTime", "EndTime"]);
+  const _normTime = (s) => {
+    const m = String(s || "").trim().match(/^(\d{1,2}):?(\d{2})$/);
+    return m ? m[1].padStart(2, "0") + m[2] : String(s || "").trim();
+  };
   const _norm = (s) => String(s || "").replace(/\s+/g, " ").trim();
   const fieldUpdate = {};
   const changes = [];
@@ -1765,10 +1794,13 @@ async function saveRevisedOrder() {
     if (!el) continue;
     let newVal = String(el.value || "").trim();
     if (DATE_FIELDS.has(fieldName)) newVal = toISODate(newVal);
+    else if (TIME_FIELDS.has(fieldName)) newVal = _normTime(newVal);
     fieldUpdate[fieldName] = newVal;
     const oldVal = String(order[fieldName] || "").trim();
     const isChanged = DATE_FIELDS.has(fieldName)
       ? toISODate(newVal) !== toISODate(oldVal)
+      : TIME_FIELDS.has(fieldName)
+      ? _normTime(newVal) !== _normTime(oldVal)
       : _norm(newVal) !== _norm(oldVal);
     if (isChanged) changes.push({ field: fieldName, oldVal, newVal });
   }
