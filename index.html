@@ -501,16 +501,70 @@ function dutiesListHtml(duties) {
     .map(s => s.replace(/^[\s•‣▪◦·\-–*]+/, '').replace(/^\d{1,2}[.)]\s*/, '').trim())
     .filter(s => s.length > 0);
   if (!items.length) return '';
+  // 2026-06-11 (David): if duties arrived as ONE paragraph with no list
+  // markers, bullet it OURSELVES by splitting on sentence boundaries — duties
+  // must never be shown as a wall of text.
+  let finalItems = items;
   if (items.length === 1) {
-    // No list structure detected — render as a single paragraph rather than a
-    // one-item bullet (honest; a lone bullet looks broken).
-    return '<p style="margin-bottom:4px"><strong>Duties:</strong></p>'
-      + `<p style="margin-top:0">${escHtml(items[0])}</p>`;
+    const sentences = items[0].split(/(?<=[.;:])\s+(?=[A-Z0-9])/)
+      .map(s => s.trim()).filter(s => s.length > 1);
+    if (sentences.length > 1) finalItems = sentences;
   }
   return '<p style="margin-bottom:4px"><strong>Duties:</strong></p>'
     + '<ul style="margin-top:0;padding-left:20px">'
-    + items.map(s => `<li>${escHtml(s)}</li>`).join('')
+    + finalItems.map(s => `<li>${escHtml(s)}</li>`).join('')
     + '</ul>';
+}
+
+// 2026-06-11 (David) — shared builder for the "Call Up Request Changed" email
+// body: shows the FULL order (every field) and HIGHLIGHTS every field in
+// `changes`, regardless of whether it was edited MANUALLY or re-extracted from
+// a revised PDF. Used by BOTH revision paths (manual field edit + PDF revision)
+// so they produce the identical full-order-with-highlights email. `cur` = the
+// new/current order values; `changes` = [{field, oldVal, newVal}].
+function changedOrderEmailBody(cur, changes, author, ts, versionNote) {
+  const chg = {};
+  (changes || []).forEach(c => { chg[c.field] = c; });
+  const _dispVal = (field, val) =>
+    (field === "StartDate" || field === "EndDate") ? fmtDateDisplay(val) : (val || "");
+  const TD = "padding:5px 10px;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;";
+  const TD_HI = TD + "background:#fff3cd;border-left:4px solid #f0ad4e;";
+  const fieldRow = (label, field) => {
+    const curv = _dispVal(field, cur[field]);
+    const c = chg[field];
+    if (!c) return `<tr><td style="${TD}"><strong>${escHtml(label)}:</strong> ${escHtml(curv)}</td></tr>`;
+    const was = _dispVal(field, c.oldVal);
+    return `<tr bgcolor="#fff3cd"><td style="${TD_HI}"><strong>${escHtml(label)}:</strong> ${escHtml(curv)} ` +
+           `<span style="color:#8a6d3b;font-size:12px;">(changed from "${escHtml(was)}")</span></td></tr>`;
+  };
+  const dutiesRow = () => {
+    const list = dutiesListHtml(cur.Duties) || '<strong>Duties:</strong> —';
+    if (!chg["Duties"]) return `<tr><td style="${TD}">${list}</td></tr>`;
+    return `<tr bgcolor="#fff3cd"><td style="${TD_HI}">${list}` +
+           `<div style="color:#8a6d3b;font-size:12px;margin-top:4px;">(Duties changed)</div></td></tr>`;
+  };
+  const intro = `This post order was revised${versionNote || ''}. Changed fields are highlighted in yellow.`;
+  return `<h2 style="font-family:Arial,Helvetica,sans-serif;">Call Up Request Changed</h2>
+     <p style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#555;">${intro}</p>
+     <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;max-width:640px;">
+       ${fieldRow("Order ID", "OrderID")}
+       ${fieldRow("Event", "Event")}
+       ${fieldRow("Start Date", "StartDate")}
+       ${fieldRow("End Date", "EndDate")}
+       ${fieldRow("Start Time", "StartTime")}
+       ${fieldRow("End Time", "EndTime")}
+       ${fieldRow("Days", "Days")}
+       ${fieldRow("Coverage", "Coverage")}
+       ${fieldRow("Guards", "NumGuards")}
+       ${fieldRow("Meeting Location", "Location")}
+       ${fieldRow("Site Contact", "SiteContact")}
+       ${fieldRow("Phone", "ContactNumber")}
+       ${fieldRow("PPE", "PPERequired")}
+       ${dutiesRow()}
+     </table>
+     <hr style="border:none;border-top:1px solid #ddd;margin:12px 0;max-width:640px;">
+     <p style="font-family:Arial,Helvetica,sans-serif;font-size:14px;margin:4px 0;"><strong>Edited by:</strong> ${escHtml(author || '')}</p>
+     <p style="font-family:Arial,Helvetica,sans-serif;font-size:14px;margin:4px 0;"><strong>Timestamp:</strong> ${escHtml(ts || '')}</p>`;
 }
 
 // Strip path-traversal characters, control bytes, and length-cap a filename
@@ -1275,48 +1329,11 @@ async function saveFieldChanges() {
   // Highlight uses a TABLE with the bgcolor ATTRIBUTE on <tr> (+ inline bg on the
   // <td>): Outlook's Word engine strips background/border-left from a <p> but DOES
   // honor <tr bgcolor>, so changed rows stay visibly highlighted (Council R1).
-  const chg = {};
-  changes.forEach(c => { chg[c.field] = c; });
-  const _dispVal = (field, val) =>
-    (field === "StartDate" || field === "EndDate") ? fmtDateDisplay(val) : (val || "");
-  const TD = "padding:5px 10px;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;";
-  const TD_HI = TD + "background:#fff3cd;border-left:4px solid #f0ad4e;";
-  const fieldRow = (label, field) => {
-    const cur = _dispVal(field, order[field]);
-    const c = chg[field];
-    if (!c) return `<tr><td style="${TD}"><strong>${escHtml(label)}:</strong> ${escHtml(cur)}</td></tr>`;
-    const was = _dispVal(field, c.oldVal);
-    return `<tr bgcolor="#fff3cd"><td style="${TD_HI}"><strong>${escHtml(label)}:</strong> ${escHtml(cur)} ` +
-           `<span style="color:#8a6d3b;font-size:12px;">(changed from "${escHtml(was)}")</span></td></tr>`;
-  };
-  const dutiesRow = () => {
-    const list = dutiesListHtml(order.Duties) || '<strong>Duties:</strong> —';
-    if (!chg["Duties"]) return `<tr><td style="${TD}">${list}</td></tr>`;
-    return `<tr bgcolor="#fff3cd"><td style="${TD_HI}">${list}` +
-           `<div style="color:#8a6d3b;font-size:12px;margin-top:4px;">(Duties changed)</div></td></tr>`;
-  };
+  // Full-order email with every changed field highlighted (shared builder,
+  // also used by the PDF-revision path). `order` already holds the post-edit
+  // values (mutated in the loop above).
   const subject = `Call Up Request Changed: ${selectedId} — ${order.Event || ''}`;
-  const body = `<h2 style="font-family:Arial,Helvetica,sans-serif;">Call Up Request Changed</h2>
-     <p style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#555;">This post order was revised. Changed fields are highlighted in yellow.</p>
-     <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;max-width:640px;">
-       ${fieldRow("Order ID", "OrderID")}
-       ${fieldRow("Event", "Event")}
-       ${fieldRow("Start Date", "StartDate")}
-       ${fieldRow("End Date", "EndDate")}
-       ${fieldRow("Start Time", "StartTime")}
-       ${fieldRow("End Time", "EndTime")}
-       ${fieldRow("Days", "Days")}
-       ${fieldRow("Coverage", "Coverage")}
-       ${fieldRow("Guards", "NumGuards")}
-       ${fieldRow("Meeting Location", "Location")}
-       ${fieldRow("Site Contact", "SiteContact")}
-       ${fieldRow("Phone", "ContactNumber")}
-       ${fieldRow("PPE", "PPERequired")}
-       ${dutiesRow()}
-     </table>
-     <hr style="border:none;border-top:1px solid #ddd;margin:12px 0;max-width:640px;">
-     <p style="font-family:Arial,Helvetica,sans-serif;font-size:14px;margin:4px 0;"><strong>Edited by:</strong> ${escHtml(author)}</p>
-     <p style="font-family:Arial,Helvetica,sans-serif;font-size:14px;margin:4px 0;"><strong>Timestamp:</strong> ${escHtml(ts)}</p>`;
+  const body = changedOrderEmailBody(order, changes, author, ts);
   // Routed through the shared notification layer (switch-gated). While the
   // switch is OFF this is the admin only, no attachment — as before.
   for (const t of notifyTargets("edit", order.Status)) {
@@ -1769,16 +1786,13 @@ async function saveRevisedOrder() {
 
   // Edit-style change notification, routed through the shared layer (so it
   // follows the order's current status basket once the switch is on).
-  const summary = changes.length
-    ? changes.map(c => `<li><strong>${escHtml(c.field)}:</strong> "${escAttr(c.oldVal)}" → "${escAttr(c.newVal)}"</li>`).join("")
-    : "<li>No field values changed (new PDF attached).</li>";
+  // Full-order email with EVERY changed field highlighted — whether the change
+  // was a re-extracted PDF value or a manual tweak in the same revision form.
+  // Shared builder, identical to the manual field-edit path. `cur` merges the
+  // new field values over the prior order.
+  const cur = { ...order, ...fieldUpdate };
   const subject = `Call Up Request Changed: ${targetId} — ${order.Event || ''} (Revised V${next})`;
-  const body = `<h2>Call Up Request Revised (V${next})</h2>
-     <p><strong>Order ID:</strong> ${escHtml(targetId)}</p>
-     <p><strong>Event:</strong> ${escHtml(order.Event || '')}</p>
-     <p><strong>Revised by:</strong> ${escHtml(author)}</p>
-     <p>A revised temporary post order (V${next}) was uploaded. Changes:</p>
-     <ul>${summary}</ul>`;
+  const body = changedOrderEmailBody(cur, changes, author, new Date().toLocaleString(), ` to V${next}`);
   for (const t of notifyTargets("edit", order.Status)) {
     await sendEmail(t.to, subject, body, t.attach);
   }
