@@ -1744,15 +1744,29 @@ async function saveRevisedOrder() {
     ef_contactNumber: "ContactNumber", ef_days: "Days", ef_coverage: "Coverage",
     ef_ppe: "PPERequired", ef_duties: "Duties",
   };
+  // 2026-06-11 (David: dates + phone falsely highlighted as changed) — the
+  // form shows DISPLAY-format dates ("04 February 2026") while the store holds
+  // canonical YYYY-MM-DD, and PDF-extracted text can differ from the stored
+  // value in whitespace only. Comparing raw strings flagged unchanged fields
+  // as changes AND saved display-format dates into the canonical store
+  // (corrupting the date invariant the create path preserves via toISODate).
+  // Fix: canonicalize dates with toISODate before BOTH saving and comparing;
+  // compare every field whitespace-normalized.
+  const DATE_FIELDS = new Set(["StartDate", "EndDate"]);
+  const _norm = (s) => String(s || "").replace(/\s+/g, " ").trim();
   const fieldUpdate = {};
   const changes = [];
   for (const [inputId, fieldName] of Object.entries(fieldMap)) {
     const el = document.getElementById(inputId);
     if (!el) continue;
-    const newVal = String(el.value || "").trim();
+    let newVal = String(el.value || "").trim();
+    if (DATE_FIELDS.has(fieldName)) newVal = toISODate(newVal);
     fieldUpdate[fieldName] = newVal;
     const oldVal = String(order[fieldName] || "").trim();
-    if (newVal !== oldVal) changes.push({ field: fieldName, oldVal, newVal });
+    const isChanged = DATE_FIELDS.has(fieldName)
+      ? toISODate(newVal) !== toISODate(oldVal)
+      : _norm(newVal) !== _norm(oldVal);
+    if (isChanged) changes.push({ field: fieldName, oldVal, newVal });
   }
 
   try {
