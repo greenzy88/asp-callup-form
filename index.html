@@ -496,7 +496,11 @@ function dutiesListHtml(duties) {
   const cnt = (re) => (txt.match(re) || []).length;
   if (cnt(/[•‣▪◦·]/g) >= 2) txt = txt.replace(/\s*[•‣▪◦·]\s*/g, '\n');              // bullet glyphs
   if (cnt(/\d{1,2}[.)]\s+[A-Za-z]/g) >= 2) txt = txt.replace(/\s+(\d{1,2}[.)]\s+)(?=[A-Za-z])/g, '\n$1'); // "1. " / "2) "
-  if (cnt(/\s[-–]\s+[A-Z]/g) >= 2) txt = txt.replace(/\s+[-–]\s+(?=[A-Z])/g, '\n');  // " - Capitalised" dashes
+  // Dash bullets — handle BOTH "- Word" (spaced) and "-Word" (no space, e.g. the
+  // MPTF post order). Dash must follow start/whitespace (so a hyphen inside
+  // "Hi-Visibility" / "co-ordinate" is never treated as a bullet) and precede a
+  // capital. >=2 occurrences required so a lone dash in prose can't split.
+  if (cnt(/(^|\s)[-–]\s*[A-Z]/g) >= 2) txt = txt.replace(/(^|\s)[-–]\s*(?=[A-Z])/g, '\n');
   const items = txt.split(/\n+/)
     .map(s => s.replace(/^[\s•‣▪◦·\-–*]+/, '').replace(/^\d{1,2}[.)]\s*/, '').trim())
     .filter(s => s.length > 0);
