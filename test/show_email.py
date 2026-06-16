@@ -10,6 +10,13 @@ import time
 
 import win32com.client
 
+# Force UTF-8 stdout — the default cp1252 console mangles é / en-dash / curly
+# quotes to "?" so a CORRECT email looked corrupted (PO3 stress test 2026-06-16).
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 
 def render(html: str) -> str:
     b = html or ""

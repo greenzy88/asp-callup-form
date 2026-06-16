@@ -487,10 +487,40 @@ function toISODate(s) {
 // the 4-digit HHMM the post orders use ("900"->"0900", "9:00"->"0900") at every
 // DISPLAY site. Same shape as the revision diff's _normTime, so display ==
 // the value the diff compares against (no spurious "changed" highlight either).
+// Canonicalise ANY time representation to 4-digit 24-hour HHMM. Handles every
+// form the app can encounter:
+//   "0900" / "900" / "09:00" / "1830"  → "0900" / "0900" / "0900" / "1830"
+//   "6:00 AM" / "11:30 PM" / "12:00 PM"→ "0600" / "2330" / "1200"   (12-hour)
+//   0.25 / 0.979166… (number 0<v<1)    → "0600" / "2330"            (Excel serial)
+// The Excel-serial case is the 2026-06-16 PO3 bug: Excel coerces a recognisable
+// AM/PM string into a day-FRACTION on round-trip (6:00 AM → 0.25), which the old
+// HHMM-only regex then rendered literally as "0.25". (Sibling of the 2026-06-11
+// "0900"→900 INTEGER coercion.) Canonicalising on read fixes already-stored
+// fractions; canonicalising on write keeps Excel from ever seeing an AM/PM time.
+function _canonTime(v) {
+  if (v === null || v === undefined || v === "") return "";
+  const num = Number(v);
+  // Excel time serial: a day fraction strictly between 0 and 1.
+  if (!isNaN(num) && num > 0 && num < 1) {
+    const mins = Math.round(num * 24 * 60);
+    const hh = Math.floor(mins / 60) % 24, mm = mins % 60;
+    return String(hh).padStart(2, "0") + String(mm).padStart(2, "0");
+  }
+  const str = String(v).trim();
+  // 12-hour clock with AM/PM (optional dots/spaces): "6:00 AM", "11:30P.M."
+  let m = str.match(/^(\d{1,2}):(\d{2})\s*([AaPp])\.?\s*[Mm]\.?$/);
+  if (m) {
+    let hh = parseInt(m[1], 10) % 12;
+    if (/[Pp]/.test(m[3])) hh += 12;
+    return String(hh).padStart(2, "0") + m[2];
+  }
+  // 24-hour "0900" / "900" / "09:00" / "1830" (also Excel integer 600/2330).
+  m = str.match(/^(\d{1,2}):?(\d{2})$/);
+  if (m) return m[1].padStart(2, "0") + m[2];
+  return str;  // unknown — leave verbatim
+}
 function fmtTimeDisplay(s) {
-  const str = String(s == null ? "" : s).trim();
-  const m = str.match(/^(\d{1,2}):?(\d{2})$/);
-  return m ? m[1].padStart(2, "0") + m[2] : str;
+  return _canonTime(s == null ? "" : s);
 }
 
 // Render an order's Duties field as an HTML bullet list for emails. Duties are
@@ -1721,8 +1751,8 @@ async function addExtractedOrder() {
       Event: document.getElementById("ef_event").value || "",
       StartDate: toISODate(document.getElementById("ef_startDate").value || ""),
       EndDate: toISODate(document.getElementById("ef_endDate").value || ""),
-      StartTime: document.getElementById("ef_startTime").value || "",
-      EndTime: document.getElementById("ef_endTime").value || "",
+      StartTime: _canonTime(document.getElementById("ef_startTime").value || ""),
+      EndTime: _canonTime(document.getElementById("ef_endTime").value || ""),
       NumGuards: document.getElementById("ef_numGuards").value || "1",
       Location: document.getElementById("ef_meetingLocation").value || "",
       SiteContact: document.getElementById("ef_siteContact").value || "",
@@ -1858,10 +1888,10 @@ async function saveRevisedOrder() {
   // "0900". Same format-only mismatch class as dates. Normalize times to 4-digit
   // ("900"/"9:00"/"09:00" -> "0900") before storing AND comparing.
   const TIME_FIELDS = new Set(["StartTime", "EndTime"]);
-  const _normTime = (s) => {
-    const m = String(s || "").trim().match(/^(\d{1,2}):?(\d{2})$/);
-    return m ? m[1].padStart(2, "0") + m[2] : String(s || "").trim();
-  };
+  // Delegate to the shared canonicaliser so the revise diff also handles 12-hour
+  // AM/PM strings and Excel time-serial fractions (PO3 stress test 2026-06-16),
+  // not just bare HHMM. Storing _canonTime() keeps Excel from re-coercing.
+  const _normTime = (s) => _canonTime(s);
   const _norm = (s) => String(s || "").replace(/\s+/g, " ").trim();
   const fieldUpdate = {};
   const changes = [];

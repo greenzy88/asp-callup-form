@@ -29,6 +29,14 @@ import urllib.request
 
 import websocket  # websocket-client
 
+# Force UTF-8 stdout — button labels carry a ✓ (U+2713) and extracted fields
+# carry é / en-dash / curly quotes; the default cp1252 console raised
+# UnicodeEncodeError mid-command (PO1 revise, stress test 2026-06-16).
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 CDP = "http://127.0.0.1:9222"
 APP_HOST = "delightful-bay-0e217b31e.7.azurestaticapps.net"
 APP_URL = f"https://{APP_HOST}/"
@@ -262,7 +270,7 @@ def cmd_editfield(order_id: str, edit_id: str, value: str):
     tab = app_tab()
     tab.js(f"selectOrder({json.dumps(order_id)})", await_promise=False)
     time.sleep(2)
-    tab.js("toggleEditFields()", await_promise=False)
+    tab.js("editFields()", await_promise=False)  # was toggleEditFields() — never existed
     time.sleep(1)
     r = tab.js(f"""(() => {{
       const e = document.getElementById({json.dumps(edit_id)});
