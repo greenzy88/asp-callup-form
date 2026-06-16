@@ -1566,8 +1566,18 @@ function parseFields(text, filename) {
     .replace(/(?<=\D)(\d\d\d)\s(\d)(?=\D)/g, "$1$2")              // "060 0" → "0600"
     .replace(/(?<=\D)(\d)\s(\d)\s(\d)(?=\D)/g, "$1$2$3");
 
-  // Strip checkbox bleed-over from two-column PDF table layout
-  const cleanField = val => val.replace(/[☐☑☒][\s\S]*$/, '').trim();
+  // Strip bleed-over from the two-column PDF table layout. Two kinds:
+  //  (1) checkbox glyphs (☐☑☒) — the PPE/Days/Coverage column.
+  //  (2) the right-column HEADER text "PPE / Equipment Requirements:" —
+  //      it carries no checkbox glyph, so it survived the glyph strip and
+  //      bled into Contact Number (whose capture runs to "Post Details",
+  //      spanning the PPE block). Seen on PO1 2026-06-16:
+  //      contactNumber = "(416) 555-0142 PPE / Equipment Requirements:".
+  //      No legitimate field value contains that label, so strip it + after.
+  const cleanField = val => val
+    .replace(/[☐☑☒][\s\S]*$/, '')
+    .replace(/\s*PPE\s*\/?\s*Equipment\s*Requirements[\s\S]*$/i, '')
+    .trim();
 
   const between = (startPat, endPat, fb = "See PDF") => {
     const m = text.match(new RegExp(startPat + "[:\\s]*([\\s\\S]+?)(?=" + endPat + ")", "i"));
@@ -1577,15 +1587,29 @@ function parseFields(text, filename) {
     const m = text.match(new RegExp(label, "i"));
     if (!m) return "See PDF";
     const win = text.substr(m.index + m[0].length, 80);
-    const d = win.match(/\b(\d{1,2}[\s\-\/][A-Za-z]{3,9}[\s\-\/]\d{4}|\d{4}-\d{2}-\d{2})\b/);
-    return d ? d[1] : "See PDF";
+    // Clients are inconsistent with date formats. Try each in priority order
+    // and return the first hit VERBATIM (the field is editable on review, and
+    // numeric DD/MM vs MM/DD is genuinely ambiguous so we never auto-swap).
+    // Formats seen on the 2026-06-16 stress test:
+    //   "04 March 2026"  ISO "2026-03-14"  "02-Mar-2026"
+    //   "Mar 21, 2026" (month-first + comma)   "18/02/2026" (all-numeric)
+    const pats = [
+      /\b(\d{1,2}[\s\-\/][A-Za-z]{3,9}[\s\-\/]\d{4})\b/,     // 04 March 2026 / 02-Mar-2026
+      /\b(\d{4}-\d{2}-\d{2})\b/,                             // ISO 2026-03-14
+      /\b([A-Za-z]{3,9}\.?\s+\d{1,2}\s*,?\s*\d{4})\b/,       // Mar 21, 2026 / March 21 2026
+      /\b(\d{1,2}\/\d{1,2}\/\d{4})\b/,                       // 18/02/2026 (DD/MM/YYYY)
+    ];
+    for (const p of pats) { const d = win.match(p); if (d) return d[1].replace(/\s+/g, " ").trim(); }
+    return "See PDF";
   };
   const timeAfter = label => {
     const m = text.match(new RegExp(label, "i"));
     if (!m) return "See PDF";
     const win = text.substr(m.index + m[0].length, 60);
     const t = win.match(/\b(\d{4})\b|\b(\d{1,2}:\d{2}\s*(?:AM|PM)?)\b/i);
-    return t ? (t[1] || t[2]) : "See PDF";
+    // .trim() — the "\s*(?:AM|PM)?" tail captures a trailing space when there is
+    // no AM/PM, so "05:00 End Time" yielded "05:00 " (PO2 stress test 2026-06-16).
+    return t ? (t[1] || t[2]).trim() : "See PDF";
   };
 
   // PPE: find checked (☒) items — scattered in right column due to table layout
@@ -1629,7 +1653,10 @@ function parseFields(text, filename) {
     endDate: dateAfter("End Date"),
     startTime: timeAfter("Start Time"),
     endTime: timeAfter("End Time"),
-    numGuards: (text.match(/Number of Escorts\s*\/?\s*Guards[:\s]*(\d+)/i) || [])[1] || "1",
+    // Label varies: "Number of Escorts/Guards", "No. of Escorts / Guards" (PO4
+    // stress test 2026-06-16 — fell back to "1" instead of 12), "# of Guards".
+    numGuards: (text.match(/(?:Number|No\.?|#)\s*(?:of\s*)?Escorts\s*\/?\s*Guards[:\s]*(\d+)/i)
+                || text.match(/(?:Number|No\.?|#)\s*of\s*Guards[:\s]*(\d+)/i) || [])[1] || "1",
     meetingLocation: between("Meeting Location", "Site Contact"),
     siteContact: between("Site Contact", "Contact Number"),
     contactNumber: between("Contact Number", "Post Details|Post Description|1\\.0"),
