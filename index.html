@@ -469,15 +469,29 @@ function fmtDateDisplay(s) {
   m = str.match(/^(\d{1,2})[\s\-\/]+([A-Za-z]{3,9})[\s\-\/]+(\d{4})$/);  // PDF "DD Mon YYYY"
   if (m) { const i = _monthIndex(m[2]);
            return i >= 0 ? `${String(m[1]).padStart(2,"0")} ${_MONTHS[i]} ${m[3]}` : str; }
+  m = str.match(/^([A-Za-z]{3,9})\.?\s+(\d{1,2})\s*,?\s*(\d{4})$/);     // "Mar 21, 2026"
+  if (m) { const i = _monthIndex(m[1]);
+           return i >= 0 ? `${String(m[2]).padStart(2,"0")} ${_MONTHS[i]} ${m[3]}` : str; }
   return str;                                  // "See PDF" / empty / unknown — leave as-is
 }
 function toISODate(s) {
   if (!s) return s || "";
   const str = String(s).trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;                      // already canonical
-  const m = str.match(/^(\d{1,2})[\s\-\/]+([A-Za-z]{3,9})[\s\-\/]+(\d{4})$/);
+  let m = str.match(/^(\d{1,2})[\s\-\/]+([A-Za-z]{3,9})[\s\-\/]+(\d{4})$/);
   if (m) { const i = _monthIndex(m[2]);
            if (i >= 0) return `${m[3]}-${String(i+1).padStart(2,"0")}-${String(m[1]).padStart(2,"0")}`; }
+  // Month-first "Mar 21, 2026" / "March 21 2026". Without this, Excel coerces
+  // the stored string to an ISO date-serial on round-trip ("2026-03-21") while
+  // re-extraction yields "Mar 21, 2026", so the revision diff FALSELY flagged
+  // StartDate/EndDate as changed (PO3 stress test 2026-06-16). Canonicalising
+  // here makes both sides ISO so unchanged dates don't highlight.
+  m = str.match(/^([A-Za-z]{3,9})\.?\s+(\d{1,2})\s*,?\s*(\d{4})$/);
+  if (m) { const i = _monthIndex(m[1]);
+           if (i >= 0) return `${m[3]}-${String(i+1).padStart(2,"0")}-${String(m[2]).padStart(2,"0")}`; }
+  // Numeric DD/MM/YYYY ("18/02/2026") stays VERBATIM on purpose — day/month
+  // order is ambiguous, so we never silently swap; it round-trips as text and
+  // compares verbatim==verbatim, which is already false-positive-safe.
   return str;                                  // unparseable (e.g. "See PDF") — preserve verbatim
 }
 // 2026-06-11 (David stress test) — Excel coerces a stored "0900" to the number

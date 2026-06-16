@@ -82,11 +82,49 @@ app.http("orderUpdate", {
       const META_FIELDS = new Set(["UpdatedBy", "LastUpdated", "OrderID", "PDFFilename", "Version"]);
       const norm = (v) => (v === undefined || v === null ? "" : String(v));
       const truncate = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+      // Canonicalise date/time fields before diffing so a value that only
+      // CHANGED FORMAT does not log a spurious StatusHistory entry. Excel coerces
+      // stored strings on round-trip — a time "6:00 AM" -> day-fraction 0.25 (or
+      // "0900" -> int 900), a date "Mar 21, 2026" -> ISO "2026-03-21" — so the
+      // stored `before` value and the re-extracted `fields` value differ only in
+      // representation. Mirror the frontend _canonTime / toISODate so the audit
+      // trail matches the (already-canonical) email diff. (Stress test 2026-06-16.)
+      const _canonTime = (v) => {
+        if (v === null || v === undefined || v === "") return "";
+        const num = Number(v);
+        if (!isNaN(num) && num > 0 && num < 1) {
+          const mins = Math.round(num * 24 * 60);
+          return String(Math.floor(mins / 60) % 24).padStart(2, "0") + String(mins % 60).padStart(2, "0");
+        }
+        const s = String(v).trim();
+        let m = s.match(/^(\d{1,2}):(\d{2})\s*([AaPp])\.?\s*[Mm]\.?$/);
+        if (m) { let hh = parseInt(m[1], 10) % 12; if (/[Pp]/.test(m[3])) hh += 12;
+                 return String(hh).padStart(2, "0") + m[2]; }
+        m = s.match(/^(\d{1,2}):?(\d{2})$/);
+        return m ? m[1].padStart(2, "0") + m[2] : s;
+      };
+      const _MO = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
+      const _moIdx = (w) => _MO.indexOf(String(w).slice(0, 3).toLowerCase());
+      const _canonDate = (v) => {
+        if (v === null || v === undefined || v === "") return "";
+        const s = String(v).trim();
+        if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+        let m = s.match(/^(\d{1,2})[\s\-\/]+([A-Za-z]{3,9})[\s\-\/]+(\d{4})$/);   // 04 March 2026 / 02-Mar-2026
+        if (m) { const i = _moIdx(m[2]); if (i >= 0) return `${m[3]}-${String(i+1).padStart(2,"0")}-${String(m[1]).padStart(2,"0")}`; }
+        m = s.match(/^([A-Za-z]{3,9})\.?\s+(\d{1,2})\s*,?\s*(\d{4})$/);            // Mar 21, 2026
+        if (m) { const i = _moIdx(m[1]); if (i >= 0) return `${m[3]}-${String(i+1).padStart(2,"0")}-${String(m[2]).padStart(2,"0")}`; }
+        return s;  // numeric DD/MM/YYYY stays verbatim (ambiguous) — compares verbatim==verbatim
+      };
+      const TIME_FIELDS = new Set(["StartTime", "EndTime"]);
+      const DATE_FIELDS = new Set(["StartDate", "EndDate"]);
+      const canon = (k, v) => TIME_FIELDS.has(k) ? _canonTime(v)
+                            : DATE_FIELDS.has(k) ? _canonDate(v)
+                            : norm(v);
       const changes = [];
       for (const k of Object.keys(fields)) {
         if (META_FIELDS.has(k)) continue;
-        const a = norm(before[k]);
-        const b = norm(fields[k]);
+        const a = canon(k, before[k]);
+        const b = canon(k, fields[k]);
         if (a !== b) changes.push({ field: k, from: truncate(a, 80), to: truncate(b, 80) });
       }
       const statusChange = changes.find((c) => c.field === "Status");
