@@ -384,6 +384,10 @@ const CLIENT_UPNS = [
 const NOTIFICATION_ROUTING_ENABLED = false;
 const ADMIN_RECIPIENT  = "dramlagan@security-asp.com";
 const ORDERS_RECIPIENT = "orders@security-asp.com";
+// PERMANENT EXCLUSION (David 2026-06-16): TPA "Duty Managers"
+// (dutymanagers@torontoportauthority.com) must NEVER receive ANY notification
+// at ANY status. When routing is enabled and STATUS_RECIPIENTS is populated
+// from the distribution matrix, do NOT add Duty Managers to any basket.
 const STATUS_RECIPIENTS = {            // consulted only when routing is ENABLED
   Pending:   [ADMIN_RECIPIENT],
   Scheduled: [ADMIN_RECIPIENT],
