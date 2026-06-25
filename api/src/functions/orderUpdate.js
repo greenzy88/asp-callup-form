@@ -135,22 +135,22 @@ app.http("orderUpdate", {
       // dropped silently.
       const hasNote = !!(body.note && String(body.note).trim());
 
-      // 2026-06-09 — Re-review bump. When a CLIENT revises a SCHEDULED order
-      // (a content field edit OR a PDF/version revision — NOT a pure status
-      // change), reset it to Pending so the change is re-reviewed/re-approved.
-      // Manager edits never bump (managers are the approvers). Completed orders
-      // are UI-locked from client edits and are excluded here too (only
-      // before.Status === "Scheduled" triggers it). Applied server-side, so it
-      // neither relies on nor violates the client status-set restriction above.
+      // 2026-06-09 / updated 2026-06-25 (David) — Re-review bump. When a SCHEDULED
+      // order gets a CONTENT change (a field edit OR a PDF/version revision — NOT a
+      // pure status change), reset it to Pending so the change is re-reviewed and
+      // re-approved. This now fires for EVERY actor, owner/manager included
+      // (David, 2026-06-25 stress test: "owner edits bump, client too" — only an
+      // explicit Scheduled/Completed status pick leaves the status as chosen).
+      // Completed orders are excluded (only before.Status === "Scheduled" triggers
+      // it). Applied server-side.
       // NOTE (accepted, pre-existing): this handler is read-modify-write on the
       // workbook with only a row-count anti-wipe guard, so a bump racing a
       // simultaneous manager approval is theoretically possible. Probability is
       // negligible for this small internal app; true fix = optimistic locking
       // (rowVersion CAS), a separate architectural change.
-      const isClientActor = !canManageStatus(upn);
       const isContentRevision = nonStatusChanges.length > 0 || isRevision;
       let revertedToPending = false;
-      if (isClientActor && isContentRevision && !statusChange && before.Status === "Scheduled") {
+      if (isContentRevision && !statusChange && before.Status === "Scheduled") {
         after.Status = "Pending";
         revertedToPending = true;
       }
