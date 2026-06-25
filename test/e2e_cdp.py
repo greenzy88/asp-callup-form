@@ -142,29 +142,43 @@ def cmd_login():
     if popup:
         p = Tab(popup["webSocketDebuggerUrl"])
         p.cmd("Runtime.enable")
-        # Account picker: the dramlagan tile is <div role=button
-        # data-test-id="dramlagan@security-asp.com">. A JS .click() does NOT
-        # trigger MSAL's handler — it needs a TRUSTED mouse event, so we
-        # dispatch a real Input.dispatchMouseEvent at the tile's center.
+        # Account picker: the dramlagan tile is a Knockout.js <div role=button
+        # data-bind="click: tile_onClick" data-test-id="dramlagan@security-asp.com">.
+        # In a HEADFUL popup window, CDP Input.dispatchMouseEvent is DROPPED by the
+        # renderer because the popup never holds OS input-focus (Page.bringToFront
+        # does not reliably grant it) — the picker just never advances. The reliable
+        # path is to dispatch a synthetic DOM MouseEvent('click') straight at the
+        # tile: Knockout's click binding listens for the native 'click' event and
+        # does NOT check isTrusted, so the bound tile_onClick fires and MSAL
+        # completes. (2026-06-25: verified live — synthetic click signed in where
+        # 4 trusted-input attempts failed. The old "needs a TRUSTED mouse event"
+        # comment was wrong for the popup case.) Trusted input kept as a fallback.
         for _ in range(20):
             time.sleep(1.5)
-            box = p.js("""(() => {
+            res = p.js("""(() => {
               const el = document.querySelector('[data-test-id="dramlagan@security-asp.com"]')
                       || [...document.querySelectorAll('[data-test-id]')].find(e =>
                            /security-asp\\.com/i.test(e.getAttribute('data-test-id')||''));
               if (!el) return null;
+              el.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true,view:window}));
+              el.dispatchEvent(new MouseEvent('mouseup',{bubbles:true,cancelable:true,view:window}));
+              el.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,view:window}));
               const r = el.getBoundingClientRect();
               return {x: r.left + r.width/2, y: r.top + r.height/2};
-            })()""", await_promise=False)
-            if box:
+            })()""", await_promise=False, user_gesture=True)
+            if res:
                 for typ in ("mousePressed", "mouseReleased"):
-                    p.cmd("Input.dispatchMouseEvent", type=typ, x=box["x"],
-                          y=box["y"], button="left", clickCount=1, buttons=1)
-                print("  popup: trusted-clicked dramlagan tile")
+                    p.cmd("Input.dispatchMouseEvent", type=typ, x=res["x"],
+                          y=res["y"], button="left", clickCount=1, buttons=1)
+                print("  popup: synthetic-clicked dramlagan tile (Knockout)")
                 break
             txt = p.js("document.body ? document.body.innerText.slice(0,160) : ''",
                        await_promise=False)
             print("  popup waiting:", (txt or "").replace("\n", " | ")[:120])
+        time.sleep(2)
+        if find_tab("login.microsoftonline.com"):
+            p.js("(()=>{const y=document.getElementById('idSIButton9');if(y)y.click();})()",
+                 await_promise=False)
         p.close()
     # wait for app to land signed-in
     for _ in range(30):

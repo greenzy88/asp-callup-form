@@ -521,6 +521,18 @@ function _canonTime(v) {
     return String(hh).padStart(2, "0") + String(mm).padStart(2, "0");
   }
   const str = String(v).trim();
+  // Excel coerces a 4-digit HHMM string to an integer on round-trip, dropping
+  // leading zeros: "0900"->900, and crucially "0030"->30 / "0005"->5 / "0000"->0
+  // for the midnight hour (00:00-00:59). The HHMM regex below needs >=3 digits to
+  // split, so a bare 1-2 digit midnight time ("30") fell through VERBATIM and the
+  // Completed email rendered "End Time: 30" (2026-06-25 stress test — the New/
+  // Scheduled/Changed emails looked fine only because they used the in-memory
+  // "0030" string before the Excel save). Pad ANY bare 1-4 digit integer back to
+  // 4-digit HHMM so every midnight-hour time round-trips at every display site.
+  if (/^\d{1,4}$/.test(str)) {
+    const p = str.padStart(4, "0");
+    return p === "0000" ? "" : p;   // all-zero == blank/unset, not "00:00"
+  }
   // 12-hour clock with AM/PM (optional dots/spaces): "6:00 AM", "11:30P.M."
   let m = str.match(/^(\d{1,2}):(\d{2})\s*([AaPp])\.?\s*[Mm]\.?$/);
   if (m) {
