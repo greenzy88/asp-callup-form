@@ -4,3 +4,4 @@ test/_email_out.txt
 test/_realtext_*.txt
 test/_batch_results.json
 test/_adv_*.js
+test/mobile_shots/
