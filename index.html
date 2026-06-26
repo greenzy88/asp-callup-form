@@ -445,40 +445,73 @@ const MANAGER_UPNS = [
 const CLIENT_UPNS = [
   "atraining@security-asp.com"
 ];
-// ── Notification routing (switch-gated) ─────────────────────────────────
-// David is the sole recipient of every notification until the per-status
-// "basket" routing is turned on. Leave NOTIFICATION_ROUTING_ENABLED = false to
-// preserve today's behaviour (everything to ADMIN_RECIPIENT). To turn it on:
-//   1) set NOTIFICATION_ROUTING_ENABLED = true and fill in STATUS_RECIPIENTS,
-//   2) add every basket address (incl. orders@security-asp.com) to the
-//      EMAIL_RECIPIENT_ALLOWLIST app setting (else email.js 403s the send).
-// The post-order PDF is attached on submission ("new") AND on completion — to
-// EVERY recipient of that notification (the latest/final PDF at completion).
-// Edits, revisions and scheduling go out with no attachment.
-const NOTIFICATION_ROUTING_ENABLED = false;
-const ADMIN_RECIPIENT  = "dramlagan@security-asp.com";
-const ORDERS_RECIPIENT = "orders@security-asp.com";
-// PERMANENT EXCLUSION (David 2026-06-16): TPA "Duty Managers"
-// (dutymanagers@torontoportauthority.com) must NEVER receive ANY notification
-// at ANY status. When routing is enabled and STATUS_RECIPIENTS is populated
-// from the distribution matrix, do NOT add Duty Managers to any basket.
-const STATUS_RECIPIENTS = {            // consulted only when routing is ENABLED
-  Pending:   [ADMIN_RECIPIENT],
-  Scheduled: [ADMIN_RECIPIENT],
-  Completed: [ADMIN_RECIPIENT, ORDERS_RECIPIENT],  // orders@ is a designated completion recipient
+// ── Notification routing (David's distribution matrix) ──────────────────
+// 2026-06-26: ROUTING IS ON, with PARTIAL ACTIVATION. Each call site loops and
+// sends an INDIVIDUAL 1:1 email per recipient, so David is naturally hidden on
+// the client-facing copies (he gets his own separate copy of everything).
+// The post-order PDF attaches on submission ("new") AND completion only.
+//
+// PARTIAL ACTIVATION (David 2026-06-26): only addresses in ACTIVE_RECIPIENTS go
+// live now — Denise, Chad, Farhad, Pat (+ David always). Airport Planning, YTZ
+// Shift Managers and Orders are wired but DORMANT until David says "turn on the
+// rest". Holly is in David's list but has no address on record yet, so she is
+// listed-but-commented until he provides it.
+// Duty Managers (dutymanagers@torontoportauthority.com) are PERMANENTLY EXCLUDED
+// — never listed in any basket, at any status (David 2026-06-16 / removed
+// entirely 2026-06-26).
+const NOTIFICATION_ROUTING_ENABLED = true;
+const ADMIN_RECIPIENT  = "dramlagan@security-asp.com";   // David — ALWAYS copied, every event
+
+// Recipient directory (key -> address). David ('admin') is added separately.
+const RECIPIENTS = {
+  denise: "droy@torontoportauthority.com",          // Denise Roy (TPA)
+  chad:   "cmartin@torontoportauthority.com",       // Chad Martin (TPA)
+  ap:     "airportplanning@torontoportauthority.com", // Airport Planning (TPA) — dormant
+  ytz:    "YTZShiftManagers@security-asp.com",       // YTZ Shift Managers (ASP) — dormant
+  farhad: "fmohammad@security-asp.com",              // Farhad (ASP)
+  pat:    "pdeal@security-asp.com",                  // Pat (ASP)
+  orders: "orders@security-asp.com",                 // Orders (ASP) — dormant
+  // holly: "<PENDING David's email, 2026-06-26>",   // add address, then list in ACTIVE_RECIPIENTS
 };
 
+// Which recipient KEYS are notified for an event + the order's status-at-event.
+// (Source: David's 2026-06-11 distribution matrix. An "edit" routes by the
+// status the order had when it was edited.)
+function recipientKeysFor(event, statusAtEvent) {
+  if (event === "new")       return ["denise", "chad", "ap", "ytz", "farhad", "pat"];      // submitted -> Pending
+  if (event === "scheduled") return ["denise", "chad", "ap"];                               // -> Scheduled
+  if (event === "completed") return ["denise", "chad", "ap", "farhad", "pat", "orders"];    // -> Completed
+  if (event === "edit") {
+    if (statusAtEvent === "Scheduled") return ["denise", "chad", "ap"];                      // (a change here bumps it back to Pending for re-review)
+    if (statusAtEvent === "Completed") return ["denise", "chad", "ap", "farhad", "pat", "orders"];
+    return ["denise", "chad", "ap", "ytz", "farhad", "pat"];                                 // Pending
+  }
+  return ["denise", "chad", "ap"];
+}
+
+// PARTIAL ACTIVATION SET — only these keys actually send right now.
+// (Add "ap", "ytz", "orders" when David says "turn on the rest"; add "holly"
+// once RECIPIENTS.holly has an address.)
+const ACTIVE_RECIPIENTS = new Set(["denise", "chad", "farhad", "pat"]);
+
 // event: "new" | "edit" | "scheduled" | "completed"; statusBasket = order Status.
-// Returns an array of { to, attach } sends. The PDF rides along on submission
-// ("new") and completion ("completed") to ALL recipients of that notification.
+// Returns [{ to, attach }] — one entry per ACTIVE recipient, plus David (always).
 function notifyTargets(event, statusBasket, attachmentFilename) {
   const withPdf = (event === "new" || event === "completed");
   const attach = withPdf ? (attachmentFilename || null) : null;
   if (!NOTIFICATION_ROUTING_ENABLED) {
     return [{ to: ADMIN_RECIPIENT, attach }];
   }
-  const basket = STATUS_RECIPIENTS[statusBasket] || [ADMIN_RECIPIENT];
-  return basket.map(to => ({ to, attach }));
+  const emails = recipientKeysFor(event, statusBasket)
+    .filter(k => ACTIVE_RECIPIENTS.has(k) && RECIPIENTS[k])   // active + has an address
+    .map(k => RECIPIENTS[k]);
+  emails.push(ADMIN_RECIPIENT);                                // David always (separate 1:1 send = hidden)
+  const seen = new Set(), out = [];
+  for (const to of emails) {
+    const lc = String(to).toLowerCase();
+    if (!seen.has(lc)) { seen.add(lc); out.push({ to, attach }); }
+  }
+  return out;
 }
 
 // Display names used in the user badge + Status History "ChangedBy"
