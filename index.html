@@ -96,6 +96,19 @@
     #loadingOverlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:9999;align-items:center;justify-content:center;}
     #loadingOverlay.show{display:flex;}
     .loading-box{background:#fff;border-radius:12px;padding:2rem 2.5rem;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,.2);}
+    /* Mobile tap targets — Bootstrap btn-sm / *-sm render ~31px which is below
+       the ~44px touch guideline (2026-06-25 emulator QA). Bring the small
+       buttons + filter inputs up to 44px and give the Save/Archive/Delete row
+       breathing space so Delete isn't fat-fingered next to Archive. The full
+       review-form inputs (form-control) are already comfortable, so they're
+       untouched. Desktop (>=768px) keeps the compact controls. */
+    @media (max-width: 767px){
+      .btn-sm, .btn-group-sm > .btn,
+      .form-control-sm, .form-select-sm{
+        min-height:44px; padding-top:.5rem; padding-bottom:.5rem; min-width:44px;
+      }
+      #statusPanel .btn{margin:0 .4rem .5rem 0;}
+    }
   </style>
 </head>
 <body>
