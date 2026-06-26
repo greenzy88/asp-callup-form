@@ -109,6 +109,47 @@
       }
       #statusPanel .btn{margin:0 .4rem .5rem 0;}
     }
+    /* ---- Co-brand: ASP (operator) + Toronto Port Authority (airport authority).
+       Design-panel winner 2026-06-25 — a quiet partnership FOOTER + the same
+       lockup on the LOGIN card + a small TPA whisper-mark in the header. Both
+       marks sit on light surfaces (where ASP's fade-to-white edge dissolves and
+       the TPA seal reads crisp). Nothing is position:fixed/absolute, so no co-brand
+       element can ever overlap a control. ---- */
+    body{min-height:100vh;display:flex;flex-direction:column;}   /* sticky-footer scaffold */
+    /* header whisper mark (desktop only — phones stay maximally clean) */
+    .app-cobrand{height:26px;width:26px;opacity:.9;margin:0 4px;vertical-align:middle;display:none;}
+    @media (min-width:768px){.app-cobrand{display:inline-block;}}
+    /* login hero lockup */
+    .login-hero{display:flex;align-items:center;justify-content:center;margin-bottom:26px;flex-wrap:wrap;}
+    .login-hero img.lh-asp{height:50px;width:auto;}
+    .login-hero .lh-tpa{background:#eef3f8;border-radius:50%;padding:5px;display:inline-flex;}
+    .login-hero .lh-tpa img{height:46px;width:46px;display:block;}
+    .login-hero .lh-div{width:1px;height:38px;background:#dfe4ec;margin:0 22px;flex:0 0 auto;}
+    @media (max-width:575px){
+      .login-hero img.lh-asp{height:40px;}
+      .login-hero .lh-tpa img{height:38px;width:38px;}
+      .login-hero .lh-div{height:30px;margin:0 16px;}
+      .login-hero{margin-bottom:20px;}
+    }
+    /* quiet partnership footer */
+    #aspFooter{background:#fbfcfe;border-top:1px solid #e5e9f0;margin-top:auto;}
+    .footer-inner{max-width:1140px;margin:0 auto;padding:26px 24px;display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap;}
+    .footer-logos{display:flex;align-items:center;gap:14px;}
+    .footer-logos .asp-mark{height:32px;opacity:.92;}
+    .footer-logos .vrule{width:1px;height:28px;background:#d8dee8;opacity:.8;}
+    .footer-logos .tpa-disc{background:#eef3f8;border-radius:50%;padding:5px;display:inline-flex;}
+    .footer-logos .tpa-disc img{height:34px;width:34px;display:block;}
+    .footer-lockup{font-size:.8rem;font-weight:500;color:#5b6573;line-height:1.35;}
+    .footer-lockup strong{font-weight:600;color:#3a4251;}
+    .footer-bbtca{font-size:.72rem;color:#9aa3b0;margin-left:auto;text-align:right;}
+    @media (max-width:767px){
+      .footer-inner{flex-direction:column;text-align:center;gap:14px;padding:22px 18px;}
+      .footer-logos{justify-content:center;gap:12px;}
+      .footer-logos .asp-mark{height:26px;}
+      .footer-logos .tpa-disc img{height:28px;width:28px;}
+      .footer-bbtca{margin-left:0;text-align:center;font-size:.66rem;}
+      .footer-lockup{font-size:.72rem;}
+    }
   </style>
 </head>
 <body>
@@ -254,6 +295,7 @@
       <span class="navbar-brand m-0 d-inline d-sm-none">Call Up Requests</span>
       <span style="background:#C8A951;color:#003366;font-size:0.6rem;font-weight:700;padding:2px 8px;border-radius:20px;text-transform:uppercase;">M365</span>
     </div>
+    <img class="app-cobrand" src="img/tpa_logo.png" alt="" aria-hidden="true" title="Toronto Port Authority">
     <span class="text-white-50 small d-none d-md-inline">Billy Bishop Toronto City Airport &ndash; BBTCA</span>
     <div class="ms-md-auto d-flex align-items-center gap-2 flex-wrap">
       <span class="user-badge" id="userBadge">Not signed in</span>
@@ -276,6 +318,11 @@
 <div class="container-fluid px-4 pb-5">
 
   <div id="authSection" class="alert alert-warning mb-4">
+    <div class="login-hero">
+      <img class="lh-asp" src="img/asp_logo.png" alt="ASP Security Services">
+      <span class="lh-div"></span>
+      <span class="lh-tpa"><img src="img/tpa_logo.png" alt="Toronto Port Authority"></span>
+    </div>
     <h5>&#x1F510; M365 Authentication Required</h5>
     <p>Click below to sign in with your Microsoft 365 account to access the call-up form system.</p>
     <button class="btn btn-primary" onclick="loginPopup()">Sign In with M365</button>
@@ -370,6 +417,18 @@
 
   </div>
 </div>
+
+<footer id="aspFooter">
+  <div class="footer-inner">
+    <div class="footer-logos">
+      <img class="asp-mark" src="img/asp_logo.png" alt="ASP Security Services">
+      <span class="vrule"></span>
+      <span class="tpa-disc"><img src="img/tpa_logo.png" alt="Toronto Port Authority"></span>
+    </div>
+    <div class="footer-lockup">Operated by <strong>ASP Security Services</strong> for the <strong>Toronto Port Authority</strong></div>
+    <div class="footer-bbtca">Billy Bishop Toronto City Airport &middot; BBTCA</div>
+  </div>
+</footer>
 
 <script>
 // 2026-05-25 — frontend constants. OneDrive plumbing constants
