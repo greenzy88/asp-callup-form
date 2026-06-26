@@ -116,11 +116,13 @@
        the TPA seal reads crisp). Nothing is position:fixed/absolute, so no co-brand
        element can ever overlap a control. ---- */
     body{min-height:100vh;display:flex;flex-direction:column;}   /* sticky-footer scaffold */
-    /* header whisper mark (desktop only — phones stay maximally clean) */
-    .app-cobrand{height:26px;width:26px;opacity:.9;margin:0 4px;vertical-align:middle;display:none;}
+    /* header whisper mark (desktop only — phones stay maximally clean). A crisp
+       white roundel so the navy seal reads as an official mark on the navy bar
+       rather than a muddy disc. */
+    .app-cobrand{height:32px;width:32px;background:#fff;border-radius:50%;padding:3px;margin:0 6px;vertical-align:middle;display:none;box-shadow:0 1px 3px rgba(0,0,0,.18);}
     @media (min-width:768px){.app-cobrand{display:inline-block;}}
-    /* login hero lockup */
-    .login-hero{display:flex;align-items:center;justify-content:center;margin-bottom:26px;flex-wrap:wrap;}
+    /* login hero lockup — left-aligned to match the card's left-aligned heading/body */
+    .login-hero{display:flex;align-items:center;justify-content:flex-start;margin-bottom:22px;flex-wrap:wrap;}
     .login-hero img.lh-asp{height:50px;width:auto;}
     .login-hero .lh-tpa{background:#eef3f8;border-radius:50%;padding:5px;display:inline-flex;}
     .login-hero .lh-tpa img{height:46px;width:46px;display:block;}
