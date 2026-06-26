@@ -1620,7 +1620,11 @@ function parseFields(text, filename) {
     .replace(/(?<=\D)(\d\d)\s(\d)\s(\d)(?=\D)/g, "$1$2$3")        // "17 0 0"
     .replace(/(?<=\D)(\d)\s(\d\d\d)(?=\D)/g, "$1$2")              // "0 600" → "0600"
     .replace(/(?<=\D)(\d\d\d)\s(\d)(?=\D)/g, "$1$2")              // "060 0" → "0600"
-    .replace(/(?<=\D)(\d)\s(\d)\s(\d)(?=\D)/g, "$1$2$3");
+    .replace(/(?<=\D)(\d)\s(\d)\s(\d)(?=\D)/g, "$1$2$3")
+    // pdf.js can space a colon apart ("7 : 00") or a client may type seconds
+    // ("7:00:30 AM"); normalise both so the time regex sees a clean H:MM.
+    .replace(/(\d)\s*:\s*(\d\d)\b/g, "$1:$2")
+    .replace(/\b(\d{1,2}:\d{2}):\d{2}\b/g, "$1");
 
   // Strip bleed-over from the two-column PDF table layout. Two kinds:
   //  (1) checkbox glyphs (☐☑☒) — the PPE/Days/Coverage column.
@@ -1635,63 +1639,100 @@ function parseFields(text, filename) {
     .replace(/\s*PPE\s*\/?\s*Equipment\s*Requirements[\s\S]*$/i, '')
     .trim();
 
-  const between = (startPat, endPat, fb = "See PDF") => {
+  // 2026-06-25 (David: "there must NEVER be 'See PDF' on any field") — the
+  // fallback for an unmatched value is now ALWAYS the raw label text (or "")
+  // rather than the literal "See PDF". Fields are editable on review, so a raw
+  // best-effort value beats a giveup string the client then has to decode.
+  const between = (startPat, endPat, fb = "") => {
     const m = text.match(new RegExp(startPat + "[:\\s]*([\\s\\S]+?)(?=" + endPat + ")", "i"));
     return m ? cleanField(m[1].replace(/\s+/g, " ")) : fb;
   };
-  const dateAfter = label => {
+  // Grab the text right after a label, bounded by the NEXT field label so a
+  // best-effort fallback can never swallow a neighbouring field. Returns the
+  // cleaned snippet (never "See PDF").
+  const afterLabel = (label, endLabel, span) => {
     const m = text.match(new RegExp(label, "i"));
-    if (!m) return "See PDF";
-    const win = text.substr(m.index + m[0].length, 80);
-    // Clients are inconsistent with date formats. Try each in priority order
-    // and return the first hit VERBATIM (the field is editable on review, and
-    // numeric DD/MM vs MM/DD is genuinely ambiguous so we never auto-swap).
-    // Formats seen on the 2026-06-16 stress test:
-    //   "04 March 2026"  ISO "2026-03-14"  "02-Mar-2026"
-    //   "Mar 21, 2026" (month-first + comma)   "18/02/2026" (all-numeric)
+    if (!m) return "";
+    let win = text.substr(m.index + m[0].length, span);
+    const e = win.match(new RegExp(endLabel, "i"));
+    if (e) win = win.slice(0, e.index);
+    return win.replace(/^[:\s]+/, "").replace(/\s+/g, " ").trim();
+  };
+  // Clients are wildly inconsistent with dates. Mine the bounded window for a
+  // recognised format (returned verbatim — numeric DD/MM vs MM/DD is genuinely
+  // ambiguous so we never auto-swap); if none match, return the raw window text.
+  const dateAfter = (label, endLabel) => {
+    const win = afterLabel(label, endLabel, 80);
+    if (!win) return "";
+    // A date RANGE in a single date field ("March 16 to March 18, 2026",
+    // "March 31 - April 2, 2026") — keep the START date (rebuilt with the shared
+    // year), since this is ONE date field. (Was grabbing the END — 2026-06-25 fuzz.)
+    const rng = win.match(/([A-Za-z]{3,9}\.?\s+\d{1,2})(?:st|nd|rd|th)?\s*(?:to|through|[-–—])\s*(?:[A-Za-z]{3,9}\.?\s+)?\d{1,2}(?:st|nd|rd|th)?\s*,?\s*(\d{2,4})/i);
+    if (rng) return (rng[1] + ", " + rng[2]).replace(/\s+/g, " ").trim();
     const pats = [
-      /\b(\d{1,2}[\s\-\/][A-Za-z]{3,9}[\s\-\/]\d{4})\b/,     // 04 March 2026 / 02-Mar-2026
-      /\b(\d{4}-\d{2}-\d{2})\b/,                             // ISO 2026-03-14
-      /\b([A-Za-z]{3,9}\.?\s+\d{1,2}\s*,?\s*\d{4})\b/,       // Mar 21, 2026 / March 21 2026
-      /\b(\d{1,2}\/\d{1,2}\/\d{4})\b/,                       // 18/02/2026 (DD/MM/YYYY)
+      /([A-Za-z]{3,9}\.?\s+\d{1,2}\s*[-–]\s*\d{1,2}\s*,?\s*\d{2,4})/, // Mar 16 - 18, 2026
+      /(\d{1,2}\s*[-–]\s*\d{1,2}\s+[A-Za-z]{3,9}\.?\s+\d{2,4})/,      // 16-18 March 2026
+      /(\d{1,2}(?:st|nd|rd|th)?\s+(?:of\s+)?[A-Za-z]{3,9}\.?\s+\d{2,4})/,  // 2nd March 2026 / 04 Mar 2026
+      /([A-Za-z]{3,9}\.?\s+\d{1,2}(?:st|nd|rd|th)?\s*,?\s*\d{2,4})/,       // March 4, 2026
+      /([A-Za-z]{3,9}[-\/]\d{1,2}[-\/]\d{2,4})/,                          // Apr-05-2026
+      /(\d{4}[-\/.]\d{1,2}[-\/.]\d{1,2})/,                                // 2026-03-04 / 2026/04/02 / 2026.03.04
+      /(\d{1,2}[-\/.]\d{1,2}[-\/.]\d{2,4})/,                              // 04/03/2026 / 03/04/26
     ];
     for (const p of pats) { const d = win.match(p); if (d) return d[1].replace(/\s+/g, " ").trim(); }
-    return "See PDF";
+    return win;   // never "See PDF" — the raw date text the client wrote
   };
-  const timeAfter = label => {
-    const m = text.match(new RegExp(label, "i"));
-    if (!m) return "See PDF";
-    const win = text.substr(m.index + m[0].length, 60);
-    const t = win.match(/\b(\d{4})\b|\b(\d{1,2}:\d{2}\s*(?:AM|PM)?)\b/i);
-    // .trim() — the "\s*(?:AM|PM)?" tail captures a trailing space when there is
-    // no AM/PM, so "05:00 End Time" yielded "05:00 " (PO2 stress test 2026-06-16).
-    return t ? (t[1] || t[2]).trim() : "See PDF";
+  // Times come as HHMM, H:MM, H.MM, h AM/PM (with or without minutes), "0900 hrs",
+  // "9 o'clock", "noon"/"midnight", and ranges. Try specific->general; fall back
+  // to the raw window. Never "See PDF".
+  const timeAfter = (label, endLabel) => {
+    const win = afterLabel(label, endLabel, 60);
+    if (!win) return "";
+    const pats = [
+      /(\d{1,2}:\d{2}\s*[AaPp]\.?\s*[Mm]\.?)/,   // 7:00 AM / 11:30 P.M.
+      /(\d{1,2}\.\d{2}\s*[AaPp]\.?\s*[Mm]\.?)/,  // 9.30 am
+      /(\d{1,2}:\d{2})/,                         // 13:45 / 5:00
+      /(\d{3,4})\s*(?:h|hrs?|hours)\b/i,         // 0900 hrs / 1700 hours / 0600h
+      /\b(\d{4})\b/,                             // 1900 / 0030
+      /(\d{1,2}\s*[AaPp]\.?\s*[Mm]\.?)/,         // 7 AM / 7AM / 11 p.m.
+      /(\d{1,2}\.\d{2})/,                        // 9.00
+      /(\d{1,2}\s*o'?clock)/i,                   // 9 o'clock
+      /(\d{1,2}\s*noon)/i,                       // 12 noon
+      /(noon|midnight)/i,                        // noon / midnight
+    ];
+    for (const p of pats) { const t = win.match(p); if (t) return t[1].replace(/\s+/g, " ").trim(); }
+    return win;   // never "See PDF" — the raw time text the client wrote
   };
 
-  // PPE: find checked (☒) items — scattered in right column due to table layout
+  // "Checked" glyph class. The official form uses ☒ (U+2612 ballot-box-with-X),
+  // but a client template may instead use ☑ (U+2611 ballot-box-with-check) or
+  // ✅ (U+2705); all three mean checked. Matching only ☒ silently EMPTIED the
+  // days/coverage/PPE columns on a ☑ form (2026-06-25 adversarial fuzz). The
+  // UNCHECKED box ☐ is deliberately NOT here, so an unchecked item never matches.
+  const CK = '[☒☑✅]';
+  // PPE: find checked items — scattered in right column due to table layout
   const PPE_ITEMS = [
     ['RAIC',               'RAIC'],
     ['AVOP DA',            'AVOP\\s*DA'],
     ['AVOP D',             'AVOP\\s*D(?!A)'],
     ['Radio',              'Radio'],
-    ['Hi-Visibility Vest', 'Hi.{0,3}Visibility\\s*Vest'],
+    ['Hi-Visibility Vest', 'Hi.{0,3}Vis(?:ibility)?\\s*Vest'],
     ['Safety Footwear',    'Safety\\s*Footwear'],
     ['Hard Hat',           'Hard\\s*Hat'],
     ['Eye Protection',     'Eye\\s*Protection'],
     ['Hearing Protection', 'Hearing\\s*Protection'],
   ];
   const ppe = PPE_ITEMS.filter(([, pat]) =>
-    new RegExp('☒\\s*' + pat, 'i').test(text)
+    new RegExp(CK + '\\s*' + pat, 'i').test(text)
   ).map(([label]) => label).join(", ");
 
   // Days: find checked day abbreviations
   const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].filter(d =>
-    new RegExp('☒\\s*' + d, 'i').test(text)
+    new RegExp(CK + '\\s*' + d, 'i').test(text)
   ).join(", ");
 
   // Coverage
-  const coverage = /☒\s*Specific\s*Hours/i.test(text) ? 'Specific Hours' :
-                   /☒\s*Continuous/i.test(text) ? 'Continuous' : '';
+  const coverage = new RegExp(CK + '\\s*Specific\\s*Hours', 'i').test(text) ? 'Specific Hours' :
+                   new RegExp(CK + '\\s*Continuous', 'i').test(text) ? 'Continuous' : '';
 
   // Duties: section 1.0 up to 2.0. PDFs use either "- " or "• " for
   // bullets; both get normalized to "\n• " so the rendered detail shows
@@ -1704,15 +1745,28 @@ function parseFields(text, filename) {
     : '';
 
   return {
-    event: between("Event\\s*\\/\\s*Project", "Start Date").replace(/^[:\s]+/, "").trim() || "See PDF",
-    startDate: dateAfter("Start Date"),
-    endDate: dateAfter("End Date"),
-    startTime: timeAfter("Start Time"),
-    endTime: timeAfter("End Time"),
-    // Label varies: "Number of Escorts/Guards", "No. of Escorts / Guards" (PO4
-    // stress test 2026-06-16 — fell back to "1" instead of 12), "# of Guards".
-    numGuards: (text.match(/(?:Number|No\.?|#)\s*(?:of\s*)?Escorts\s*\/?\s*Guards[:\s]*(\d+)/i)
-                || text.match(/(?:Number|No\.?|#)\s*of\s*Guards[:\s]*(\d+)/i) || [])[1] || "1",
+    event: between("Event\\s*\\/\\s*Project", "Start Date").replace(/^[:\s]+/, "").trim() || "",
+    startDate: dateAfter("Start Date", "End Date"),
+    endDate: dateAfter("End Date", "Days Required|Days|Start Time|Coverage"),
+    startTime: timeAfter("Start Time", "End Time"),
+    endTime: timeAfter("End Time", "Coverage|Number of|Meeting Location"),
+    // Guard count. The label varies wildly across clients ("Number of
+    // Escorts/Guards", "No. of Escorts / Guards", "# of Guards", "Guards
+    // Required", "Number of Security Guards/Officers", "Guards - 4", "Guards = 4",
+    // "Guards 4", value-before-label "4 guards"). Search ONLY the header table
+    // (before the duties section) so a "2 guards" sentence in the Duties can't
+    // hijack the count; handle pdf.js-split digits ("1 2" -> 12). A silent wrong
+    // "1" here is operationally dangerous (2026-06-25 adversarial fuzz).
+    numGuards: (() => {
+      const hdr = text.split(/Post Details|1\.0\s*Post/i)[0] || text;
+      const grab = (re) => { const m = hdr.match(re); return m ? m[1].replace(/\s+/g, "") : null; };
+      return (
+        grab(/(?:Number|No\.?|#|Qty|Quantity)\b[^\d]{0,18}?(?:Guards?|Officers?|Escorts?)\b[^\d]{0,18}?(\d{1,3}(?:\s\d)?)/i)
+        || grab(/(?:Guards?|Officers?|Escorts?)\b[^\d]{0,18}?(\d{1,3}(?:\s\d)?)/i)
+        || grab(/(\d{1,3})\s+(?:Security\s+)?(?:Guards?|Officers?|Escorts?)\b/i)
+        || "1"
+      );
+    })(),
     meetingLocation: between("Meeting Location", "Site Contact"),
     siteContact: between("Site Contact", "Contact Number"),
     contactNumber: between("Contact Number", "Post Details|Post Description|1\\.0"),

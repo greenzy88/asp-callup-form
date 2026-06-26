@@ -1,3 +1,6 @@
 test/__pycache__/
 test/_email_req.txt
 test/_email_out.txt
+test/_realtext_*.txt
+test/_batch_results.json
+test/_adv_*.js
