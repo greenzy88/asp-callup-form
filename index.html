@@ -454,8 +454,8 @@ const CLIENT_UPNS = [
 // PARTIAL ACTIVATION (David 2026-06-26): only addresses in ACTIVE_RECIPIENTS go
 // live now — Denise, Chad, Farhad, Pat (+ David always). Airport Planning, YTZ
 // Shift Managers and Orders are wired but DORMANT until David says "turn on the
-// rest". Holly is in David's list but has no address on record yet, so she is
-// listed-but-commented until he provides it.
+// rest". Holly has APP ACCESS ONLY and is NOT a notification recipient
+// (David 2026-06-26) — do not add her here.
 // Duty Managers (dutymanagers@torontoportauthority.com) are PERMANENTLY EXCLUDED
 // — never listed in any basket, at any status (David 2026-06-16 / removed
 // entirely 2026-06-26).
@@ -471,7 +471,7 @@ const RECIPIENTS = {
   farhad: "fmohammad@security-asp.com",              // Farhad (ASP)
   pat:    "pdeal@security-asp.com",                  // Pat (ASP)
   orders: "orders@security-asp.com",                 // Orders (ASP) — dormant
-  // holly: "<PENDING David's email, 2026-06-26>",   // add address, then list in ACTIVE_RECIPIENTS
+  // (Holly = app access only, NOT a notification recipient — never list here)
 };
 
 // Which recipient KEYS are notified for an event + the order's status-at-event.
@@ -490,8 +490,8 @@ function recipientKeysFor(event, statusAtEvent) {
 }
 
 // PARTIAL ACTIVATION SET — only these keys actually send right now.
-// (Add "ap", "ytz", "orders" when David says "turn on the rest"; add "holly"
-// once RECIPIENTS.holly has an address.)
+// (Add "ap", "ytz", "orders" when David says "turn on the rest". Holly is
+// app-access-only — NOT a notification recipient, so she is never added here.)
 const ACTIVE_RECIPIENTS = new Set(["denise", "chad", "farhad", "pat"]);
 
 // event: "new" | "edit" | "scheduled" | "completed"; statusBasket = order Status.
@@ -885,6 +885,16 @@ try {
   console.error("MSAL error:", e);
 }
 
+// Complete a redirect-based sign-in when loginPopup() fell back to loginRedirect
+// on a phone (blocked popup). Runs the SAME ASP tenant guard via handleAuthResponse.
+// No-op on a normal load (handleRedirectPromise resolves null when no redirect is
+// in progress), so the working popup path is unaffected.
+if (msalInstance) {
+  msalInstance.handleRedirectPromise()
+    .then(resp => { if (resp && resp.account) return handleAuthResponse(resp); })
+    .catch(e => { console.warn("redirect sign-in failed:", e && (e.message || e.errorCode)); });
+}
+
 // Delegated click handlers. Order rows + card list use data-order-id rather
 // than inline onclick with interpolated OrderID — that prevented us from
 // having to JS-string-escape the value (and protects against XSS via a
@@ -905,73 +915,87 @@ function hideLoading() {
   document.getElementById("loadingOverlay").classList.remove("show");
 }
 
+// Shared post-auth handler — runs for BOTH the popup AND the redirect-fallback
+// path, so the ASP-only tenant guard can never be bypassed (Council go-live
+// caveat 2026-06-26). Returns true on a committed ASP sign-in.
+async function handleAuthResponse(response) {
+  if (!response || !response.account) return false;
+  // 2026-06-08 — Tenant guard (defense-in-depth, Council verify forum).
+  // loginHint/domainHint only STEER the picker; they don't CONTRACT the result.
+  // If the user lands on a non-ASP account, reject loudly, wipe MSAL cache so the
+  // wrong account can't linger in the next picker, and let the user re-pick.
+  const _acct = response.account || {};
+  const _tid = String(_acct.tenantId || (_acct.idTokenClaims && _acct.idTokenClaims.tid) || "").toLowerCase();
+  if (_tid !== ASP_TENANT_ID.toLowerCase()) {
+    try {
+      Object.keys(localStorage)
+        .filter(k => /(^|\.)msal\.|47a13aa4-d214-4987-a6c8-472cc0161f67/i.test(k))
+        .forEach(k => localStorage.removeItem(k));
+    } catch (_) {}
+    try { msalInstance.setActiveAccount(null); } catch (_) {}
+    alert("Please sign in with your ASP account (atraining@security-asp.com). " +
+          "The account you selected belongs to a different organization and can't access this app.");
+    return false;
+  }
+  msalInstance.setActiveAccount(response.account);
+  idToken = response.idToken;
+  currentUserUpn = response.account.username || "";
+  document.getElementById("authSection").style.display = "none";
+  document.getElementById("appContent").style.display = "block";
+  document.getElementById("signOutBtn").style.display = "block";
+  detectUserRole(currentUserUpn);
+  // 2026-05-28 — Name+PIN gate. /api/me returns whether this account needs the
+  // Submitter dialog (clients always, dramlagan@ only when ADMIN_PIN_TEST=1).
+  try {
+    const meBody = await apiJson("/me");
+    if (meBody && meBody.submitter_dialog_required && !submitterToken) {
+      await showSubmitterDialog();
+    } else if (meBody && submitterDisplayName) {
+      const badge = document.getElementById("userBadge");
+      if (badge) badge.textContent = submitterDisplayName;
+    }
+  } catch (e) {
+    console.warn("/api/me check failed:", e);
+  }
+  showLoading("Loading orders...");
+  await loadDataFromExcel();
+  hideLoading();
+  if (!window._healthRetryHandle) {
+    window._healthRetryHandle = setInterval(() => {
+      if (!lastLoadSucceeded) { console.log("[health] periodic re-read attempt"); loadDataFromExcel(); }
+    }, 5 * 60 * 1000);
+  }
+  if (!window._authStatusPollHandle) {
+    window._authStatusPollHandle = setInterval(checkOwnerAuthStatus, 10 * 60 * 1000);
+    checkOwnerAuthStatus();
+  }
+  return true;
+}
+
+// Popup-failure codes where the popup never really opened (iOS Safari, in-app
+// WKWebView from Teams/Outlook/SMS, locked corporate browsers). On these we fall
+// back to a full-page REDIRECT (same loginRequest → still ASP tenant-pinned; the
+// return is processed by handleRedirectPromise on load, which re-runs the guard).
+const _POPUP_FALLBACK_CODES = ["popup_window_error", "empty_window_error", "monitor_window_timeout"];
+let _loginInFlight = false;
+
 function loginPopup() {
   if (!msalInstance) { alert("MSAL not ready"); return; }
-  msalInstance.loginPopup(loginRequest).then(async response => {
-    // 2026-06-08 — Tenant guard (defense-in-depth, Council verify forum).
-    // loginHint/domainHint only STEER the picker; they don't CONTRACT the result.
-    // If the user lands on a non-ASP account (Edge multi-profile, auto-pick, or a
-    // stale cached account MSAL surfaces), committing it here would proceed into a
-    // cryptic backend 401 (api/src/shared/auth.js rejects foreign tid). Instead,
-    // reject loudly, wipe MSAL cache so the wrong account can't linger in the next
-    // picker, and let the user re-pick. This also closes any residual "loginPopup
-    // consulted a cached /common account" path: a wrong tid never gets committed.
-    const _acct = response.account || {};
-    const _tid = String(_acct.tenantId || (_acct.idTokenClaims && _acct.idTokenClaims.tid) || "").toLowerCase();
-    if (_tid !== ASP_TENANT_ID.toLowerCase()) {
-      try {
-        Object.keys(localStorage)
-          .filter(k => /(^|\.)msal\.|47a13aa4-d214-4987-a6c8-472cc0161f67/i.test(k))
-          .forEach(k => localStorage.removeItem(k));
-      } catch (_) {}
-      try { msalInstance.setActiveAccount(null); } catch (_) {}
-      alert("Please sign in with your ASP account (atraining@security-asp.com). " +
-            "The account you selected belongs to a different organization and can't access this app.");
-      return;
-    }
-    msalInstance.setActiveAccount(response.account);
-    idToken = response.idToken;
-    currentUserUpn = response.account.username || "";
-    document.getElementById("authSection").style.display = "none";
-    document.getElementById("appContent").style.display = "block";
-    document.getElementById("signOutBtn").style.display = "block";
-    detectUserRole(currentUserUpn);
-    // 2026-05-28 — Name+PIN gate. /api/me returns whether this account
-    // needs the Submitter dialog (clients always, dramlagan@ only when
-    // ADMIN_PIN_TEST=1). If yes and no cached token, block app content
-    // behind the modal until they identify themselves.
-    try {
-      const meBody = await apiJson("/me");
-      if (meBody && meBody.submitter_dialog_required && !submitterToken) {
-        await showSubmitterDialog();
-      } else if (meBody && submitterDisplayName) {
-        // Refresh the badge so it shows the cached display_name.
-        const badge = document.getElementById("userBadge");
-        if (badge) badge.textContent = submitterDisplayName;
+  if (_loginInFlight) return;   // guard double-tap → MSAL "interaction_in_progress"
+  _loginInFlight = true;
+  msalInstance.loginPopup(loginRequest)
+    .then(handleAuthResponse)
+    .catch(e => {
+      const code = (e && e.errorCode) || "";
+      if (code === "user_cancelled") return;                 // closed on purpose
+      if (_POPUP_FALLBACK_CODES.includes(code)) {
+        try { msalInstance.loginRedirect(loginRequest); return; } catch (_) {}
       }
-    } catch (e) {
-      console.warn("/api/me check failed:", e);
-    }
-    showLoading("Loading orders...");
-    await loadDataFromExcel();
-    hideLoading();
-    if (!window._healthRetryHandle) {
-      window._healthRetryHandle = setInterval(() => {
-        if (!lastLoadSucceeded) {
-          console.log("[health] periodic re-read attempt");
-          loadDataFromExcel();
-        }
-      }, 5 * 60 * 1000);
-    }
-    // 2026-05-25 — every 10 min, poll /api/auth/status to detect when
-    // the owner's stored refresh token has expired. The standard
-    // /api/orders error path also surfaces this, but this poll lets
-    // the banner appear BEFORE a user clicks Save.
-    if (!window._authStatusPollHandle) {
-      window._authStatusPollHandle = setInterval(checkOwnerAuthStatus, 10 * 60 * 1000);
-      checkOwnerAuthStatus();
-    }
-  }).catch(e => { alert("Login failed: " + e.message); });
+      alert("Sign-in couldn't open its window. Please allow pop-ups for this site and tap " +
+            "Sign In again — or open the app directly in Safari/Chrome.\n\n(" +
+            (e && e.message ? e.message : code) + ")");
+    })
+    .finally(() => { _loginInFlight = false; });
 }
 
 async function checkOwnerAuthStatus() {
