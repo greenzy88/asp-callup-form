@@ -1501,7 +1501,7 @@ async function updateStatus() {
        <p><strong>PPE:</strong> ${escHtml(order.PPERequired || '')}</p>
        ${dutiesListHtml(order.Duties)}
        <p><strong>Updated by:</strong> ${escHtml(updatedBy)}</p>
-       <p>Your temporary post order has been scheduled and approved. Please confirm receipt.</p>`;
+       <p>Your temporary post order has been scheduled and approved.</p>`;
     for (const t of notifyTargets("scheduled", "Scheduled")) {
       await sendEmail(t.to, subject, body, t.attach);
     }
