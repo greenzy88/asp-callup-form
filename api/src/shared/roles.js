@@ -40,7 +40,23 @@ function canManageStatus(upn) {
   return r === OWNER || r === MANAGER;
 }
 
+// Cancellation is available to managers/owner AND to three named client
+// submitters — Denise, Chad, Holly (David 2026-07-05). They share the client
+// login and are told apart by their Name+PIN display_name, so this matches on
+// the submitter's display name (first-name, case-insensitive: "Denise" or
+// "Denise Roy" both match). Update this list if their registered names change.
+const CANCEL_SUBMITTER_FIRSTNAMES = ["denise", "chad", "holly"];
+function isCancelSubmitter(submitter) {
+  if (!submitter || !submitter.display_name) return false;
+  const n = String(submitter.display_name).trim().toLowerCase();
+  return CANCEL_SUBMITTER_FIRSTNAMES.some((f) => n === f || n.startsWith(f + " "));
+}
+function canCancel(upn, submitter) {
+  return canManageStatus(upn) || isCancelSubmitter(submitter);
+}
+
 module.exports = {
   OWNER, MANAGER, CLIENT,
   roleFor, isAuthorised, canEdit, canManageStatus,
+  canCancel, isCancelSubmitter, CANCEL_SUBMITTER_FIRSTNAMES,
 };

@@ -3,7 +3,7 @@
 
 const { app } = require("@azure/functions");
 const { requireUser } = require("../shared/auth");
-const { canManageStatus, canEdit } = require("../shared/roles");
+const { canManageStatus, canEdit, canCancel } = require("../shared/roles");
 const { requireSubmitterIfClient, auditLabel } = require("../shared/submitters");
 const {
   readSheet, writeSheet, workbookItemId,
@@ -32,6 +32,9 @@ app.http("orderUpdate", {
       if (Object.keys(fields).some((k) => k === "__proto__" || k === "constructor" || k === "prototype")) {
         return { status: 400, jsonBody: { error: "Invalid field key" } };
       }
+      // Cancellation request? (a Status field set to "Cancelled", case-insensitive)
+      const _statusVal = fields.Status !== undefined ? fields.Status : fields.status;
+      const isCancelReq = _statusVal != null && String(_statusVal).trim().toLowerCase() === "cancelled";
       const itemId = await workbookItemId();
       const [orders, history] = await Promise.all([
         readSheet(itemId, "Orders"),
@@ -47,6 +50,15 @@ app.http("orderUpdate", {
       const ts = new Date();
       const before = orderRows[idx];
 
+      // Cancelled is terminal — a cancelled order can't be edited or re-statused.
+      // And a completed order can't be cancelled (it's already done).
+      if (String(before.Status || "").trim() === "Cancelled") {
+        return { status: 400, jsonBody: { error: "This order is cancelled and can no longer be changed." } };
+      }
+      if (isCancelReq && String(before.Status || "").trim() === "Completed") {
+        return { status: 400, jsonBody: { error: "A completed order cannot be cancelled." } };
+      }
+
       // # council-verified:panel-council_callup_autostatus_engine-1780981731
       // 2026-06-09 — Clients (canEdit but not canManageStatus) may edit CONTENT
       // fields, add notes, and upload a revised PDF — but may NOT set ANY status
@@ -59,7 +71,12 @@ app.http("orderUpdate", {
           return { status: 403, jsonBody: { error: "Not authorised to edit this order" } };
         }
         if (Object.keys(fields).some((k) => k.toLowerCase() === "status")) {
-          return { status: 403, jsonBody: { error: "Only managers can set the order status" } };
+          // Clients may set exactly ONE status — "Cancelled" — and only if they
+          // are an authorised cancel-submitter (Denise/Chad/Holly, by display
+          // name). Every other status transition stays manager-only.
+          if (!isCancelReq || !canCancel(upn, submitter)) {
+            return { status: 403, jsonBody: { error: "Only managers can set the order status" } };
+          }
         }
       }
       const after = Object.assign({}, before, fields, {

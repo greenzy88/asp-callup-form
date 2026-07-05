@@ -70,6 +70,7 @@
     .badge-completed{background:var(--asp-blue);}
     .badge-complete{background:#2980b9;}
     .badge-review{background:#8e44ad;}
+    .badge-cancelled{background:#7f8c8d;text-decoration:line-through;}
     #detailPanel{background:#fff;border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,.08);display:none;}
     .detail-header{background:var(--asp-blue);color:#fff;padding:1rem 1.5rem;border-radius:10px 10px 0 0;display:flex;justify-content:space-between;align-items:center;}
     .field-row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f0f0f0;font-size:.86rem;}
@@ -370,7 +371,7 @@
       <div class="p-3 d-flex flex-wrap gap-2 align-items-center border-bottom" id="tableToolbar">
         <input type="text" id="searchBox" class="form-control form-control-sm flex-grow-1" style="min-width:140px;max-width:240px" placeholder="Search orders..." oninput="renderTable()">
         <select id="statusFilter" class="form-select form-select-sm" style="width:auto;min-width:120px" onchange="renderTable()">
-          <option value="">All Statuses</option><option value="Pending">Pending</option><option value="Scheduled">Scheduled</option><option value="Completed">Completed</option>
+          <option value="">All Statuses</option><option value="Pending">Pending</option><option value="Scheduled">Scheduled</option><option value="Completed">Completed</option><option value="Cancelled">Cancelled</option>
         </select>
         <div class="form-check form-check-inline m-0">
           <input class="form-check-input" type="checkbox" id="showArchived" onchange="renderTable()">
@@ -460,6 +461,10 @@ const CLIENT_UPNS = [
 // — never listed in any basket, at any status (David 2026-06-16 / removed
 // entirely 2026-06-26).
 const NOTIFICATION_ROUTING_ENABLED = true;
+// Cancellation notifications — start OFF (David-only) so the feature can be tested
+// safely without emailing third parties. Flip to true after David signs off; then
+// cancelling notifies the order's current-status distribution (recipientKeysFor "cancelled").
+const CANCEL_NOTIFY_LIVE = false;
 const ADMIN_RECIPIENT  = "dramlagan@security-asp.com";   // David — ALWAYS copied, every event
 
 // Recipient directory (key -> address). David ('admin') is added separately.
@@ -484,6 +489,12 @@ function recipientKeysFor(event, statusAtEvent) {
   if (event === "edit") {
     if (statusAtEvent === "Scheduled") return ["denise", "chad", "ap"];                      // (a change here bumps it back to Pending for re-review)
     if (statusAtEvent === "Completed") return ["denise", "chad", "ap", "farhad", "pat", "orders"];
+    return ["denise", "chad", "ap", "ytz", "farhad", "pat"];                                 // Pending
+  }
+  if (event === "cancelled") {
+    // "Notify everyone on the order's CURRENT-status distribution" (David 2026-07-05).
+    // A cancel can only happen from Pending or Scheduled.
+    if (statusAtEvent === "Scheduled") return ["denise", "chad", "ap"];
     return ["denise", "chad", "ap", "ytz", "farhad", "pat"];                                 // Pending
   }
   return ["denise", "chad", "ap"];
@@ -1218,6 +1229,7 @@ function badgeClass(s) {
   return s === "Pending" ? "badge-pending"
        : s === "Scheduled" ? "badge-active"
        : s === "Completed" ? "badge-completed"
+       : s === "Cancelled" ? "badge-cancelled"
        : "badge-review";
 }
 
@@ -1302,20 +1314,32 @@ function selectOrder(id) {
       ? `<button class="btn btn-sm" style="background:var(--asp-blue);color:#fff" onclick="markCompleted()">&#x2713; Mark as Completed</button>`
       : '';
     // Upload Revised PDF — open to anyone with edit rights (admin + client),
-    // on any non-completed, non-archived order. Reuses the create review card.
-    const reviseBtn = (!isEditingFields && o.Status !== "Completed" && (!o.Archived || o.Archived === "No"))
+    // on any non-completed, non-cancelled, non-archived order.
+    const reviseBtn = (!isEditingFields && o.Status !== "Completed" && o.Status !== "Cancelled" && (!o.Archived || o.Archived === "No"))
       ? `<button class="btn btn-sm btn-outline-primary" onclick="startReviseUpload()">&#x1F4C4; Upload Revised PDF</button>`
+      : '';
+    // Cancel Order — managers/owner OR the named client submitters (Denise/Chad/
+    // Holly, by display name). Only on a live (Pending/Scheduled) order. The
+    // backend re-enforces the same rule. (David 2026-07-05.)
+    const _sub = String(submitterDisplayName || "").trim().toLowerCase();
+    const canCancelFront = isAdmin || isManager ||
+      ["denise", "chad", "holly"].some((f) => _sub === f || _sub.startsWith(f + " "));
+    const cancelBtn = (!isEditingFields && canCancelFront && o.Status !== "Completed" && o.Status !== "Cancelled" && (!o.Archived || o.Archived === "No"))
+      ? `<button class="btn btn-sm btn-outline-danger" onclick="cancelOrder()">&#x2715; Cancel Order</button>`
       : '';
     headerHtml = isEditingFields
       ? `<div class="d-flex gap-2 mb-3 flex-wrap">
            <button class="btn btn-sm" style="background:var(--asp-blue);color:#fff" onclick="saveFieldChanges()">&#x2713; Submit Revision</button>
            <button class="btn btn-sm btn-outline-secondary" onclick="cancelFieldChanges()">Cancel</button>
          </div>`
-      : `<div class="d-flex gap-2 mb-3 flex-wrap">
+      : (o.Status === "Cancelled"
+          ? `<div class="mb-3"><span class="text-muted" style="font-style:italic;">This order has been cancelled.</span></div>`
+          : `<div class="d-flex gap-2 mb-3 flex-wrap">
            <button class="btn btn-sm btn-outline-primary" onclick="editFields()">&#x270E; Edit Fields</button>
            ${reviseBtn}
            ${markCompletedBtn}
-         </div>`;
+           ${cancelBtn}
+         </div>`);
   }
 
   if (isEditingFields) {
@@ -1672,6 +1696,71 @@ async function markCompleted() {
   const fresh = orders.find(o => o.OrderID === selectedId) || order;
   await notifyCompleted(fresh);
   await selectOrder(selectedId);
+}
+
+// Cancel an order: set Status="Cancelled" (terminal) and notify everyone on the
+// order's current-status distribution. Available to managers and to the named
+// client submitters (Denise/Chad/Holly); the backend re-enforces both.
+// (David 2026-07-05.)
+async function cancelOrder() {
+  if (!selectedId) return;
+  const order = orders.find(o => o.OrderID === selectedId);
+  if (!order) return;
+  const statusAtCancel = order.Status;
+  if (statusAtCancel === "Completed" || statusAtCancel === "Cancelled") return;
+  if (!confirm(`Cancel order ${selectedId}?\n\nThis marks it Cancelled and can't be undone. Everyone on the current (${statusAtCancel}) distribution will be notified.`)) return;
+  try {
+    await apiJson(`/orders/${encodeURIComponent(selectedId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fields: { Status: "Cancelled" }, note: "Order cancelled" }),
+    });
+  } catch (e) {
+    alert("Cancel failed: " + e.message);
+    return;
+  }
+  await loadDataFromExcel();
+  const author = submitterDisplayName || displayName(currentUserUpn);
+  const ts = new Date().toLocaleString("en-US", { timeZone: "America/Toronto" });
+  const subject = `Call Up Request CANCELLED: ${selectedId} - ${order.Event || ''}`;
+  const body = cancelOrderEmailBody(order, statusAtCancel, author, ts);
+  // Safe-test gate: while CANCEL_NOTIFY_LIVE is false, cancellation emails go to
+  // David only (no third-party sends). Flip it true after sign-off for real routing.
+  const targets = CANCEL_NOTIFY_LIVE
+    ? notifyTargets("cancelled", statusAtCancel)
+    : [{ to: ADMIN_RECIPIENT, attach: null }];
+  for (const t of targets) {
+    await sendEmail(t.to, subject, body, t.attach);
+  }
+  await selectOrder(selectedId);
+}
+
+function cancelOrderEmailBody(o, statusAtCancel, author, ts) {
+  const TD = "padding:5px 10px;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;";
+  const row = (label, val) => `<tr><td style="${TD}"><strong>${escHtml(label)}:</strong> ${escHtml(val || '')}</td></tr>`;
+  return `<h2 style="font-family:Arial,Helvetica,sans-serif;color:#c0392b;">Call Up Request CANCELLED</h2>
+     <p style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#555;">
+       This temporary post order has been <strong>cancelled</strong> (it was at status
+       <strong>${escHtml(statusAtCancel || '')}</strong>). No coverage is required for this request.</p>
+     <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;max-width:640px;">
+       ${row("Order ID", o.OrderID)}
+       ${row("Event", o.Event)}
+       ${row("Start Date", fmtDateDisplay(o.StartDate))}
+       ${row("End Date", fmtDateDisplay(o.EndDate))}
+       ${row("Start Time", fmtTimeDisplay(o.StartTime))}
+       ${row("End Time", fmtTimeDisplay(o.EndTime))}
+       ${row("Days", o.Days)}
+       ${row("Coverage", o.Coverage)}
+       ${row("Guards", o.NumGuards)}
+       ${row("Meeting Location", o.Location)}
+       ${row("Site Contact", o.SiteContact)}
+       ${row("Phone", o.ContactNumber)}
+       ${row("PPE", o.PPERequired)}
+       <tr><td style="${TD}">${dutiesListHtml(o.Duties) || '<strong>Duties:</strong> —'}</td></tr>
+     </table>
+     <hr style="border:none;border-top:1px solid #ddd;margin:12px 0;max-width:640px;">
+     <p style="font-family:Arial,Helvetica,sans-serif;font-size:14px;margin:4px 0;"><strong>Cancelled by:</strong> ${escHtml(author || '')}</p>
+     <p style="font-family:Arial,Helvetica,sans-serif;font-size:14px;margin:4px 0;"><strong>Timestamp:</strong> ${escHtml(ts || '')}</p>`;
 }
 
 // ── PDF parsing ──
