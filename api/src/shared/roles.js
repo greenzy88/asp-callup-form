@@ -46,10 +46,18 @@ function canManageStatus(upn) {
 // the submitter's display name (first-name, case-insensitive: "Denise" or
 // "Denise Roy" both match). Update this list if their registered names change.
 const CANCEL_SUBMITTER_FIRSTNAMES = ["denise", "chad", "holly"];
+// Recognise each person by FIRST NAME in whatever format they registered — first
+// name alone ("Denise"), first + last initial ("Denise R"), or full name ("Denise
+// Roy"), any capitalisation, any separator (space/hyphen/period/comma). A longer
+// DIFFERENT name ("Deniser", "Chadwick") is rejected: the char right after the
+// first name must not be another letter. (David 2026-07-05: "recognise it's Holly,
+// Denise or Chad spelled in any which way … shouldn't be too strict.")
 function isCancelSubmitter(submitter) {
   if (!submitter || !submitter.display_name) return false;
   const n = String(submitter.display_name).trim().toLowerCase();
-  return CANCEL_SUBMITTER_FIRSTNAMES.some((f) => n === f || n.startsWith(f + " "));
+  return CANCEL_SUBMITTER_FIRSTNAMES.some(
+    (f) => n === f || (n.startsWith(f) && !/[a-z]/.test(n.charAt(f.length)))
+  );
 }
 function canCancel(upn, submitter) {
   return canManageStatus(upn) || isCancelSubmitter(submitter);

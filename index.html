@@ -1330,8 +1330,10 @@ function selectOrder(id) {
     // Holly, by display name). Only on a live (Pending/Scheduled) order. The
     // backend re-enforces the same rule. (David 2026-07-05.)
     const _sub = String(submitterDisplayName || "").trim().toLowerCase();
+    // Match the backend roles.isCancelSubmitter: first name in any format
+    // (alone / + last initial / full name), any separator; reject a longer name.
     const canCancelFront = isAdmin || isManager ||
-      ["denise", "chad", "holly"].some((f) => _sub === f || _sub.startsWith(f + " "));
+      ["denise", "chad", "holly"].some((f) => _sub === f || (_sub.startsWith(f) && !/[a-z]/.test(_sub.charAt(f.length))));
     const cancelBtn = (!isEditingFields && canCancelFront && o.Status !== "Completed" && o.Status !== "Cancelled" && (!o.Archived || o.Archived === "No"))
       ? `<button class="btn btn-sm btn-outline-danger" onclick="cancelOrder()">&#x2715; Cancel Order</button>`
       : '';
