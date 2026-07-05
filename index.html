@@ -28,6 +28,7 @@
     .stat-card.active{background:#27ae60;}
     .stat-card.completed{background:var(--asp-blue);}
     .stat-card.review{background:#8e44ad;}
+    .stat-card.cancelled{background:#7f8c8d;}
     .stat-number{font-size:1.75rem;font-weight:700;line-height:1;}
     .stat-label{font-size:.75rem;opacity:.85;margin-top:4px;text-transform:uppercase;letter-spacing:.5px;}
     @media (min-width: 768px){
@@ -334,9 +335,10 @@
   <div id="appContent" style="display:none;">
 
     <div class="row g-2 g-md-3 mb-4">
-      <div class="col-4"><div class="stat-card pending"><div class="stat-number" id="statPending">0</div><div class="stat-label">Pending</div></div></div>
-      <div class="col-4"><div class="stat-card active"><div class="stat-number" id="statScheduled">0</div><div class="stat-label">Scheduled</div></div></div>
-      <div class="col-4"><div class="stat-card completed"><div class="stat-number" id="statCompleted">0</div><div class="stat-label">Completed</div></div></div>
+      <div class="col-6 col-md-3"><div class="stat-card pending"><div class="stat-number" id="statPending">0</div><div class="stat-label">Pending</div></div></div>
+      <div class="col-6 col-md-3"><div class="stat-card active"><div class="stat-number" id="statScheduled">0</div><div class="stat-label">Scheduled</div></div></div>
+      <div class="col-6 col-md-3"><div class="stat-card completed"><div class="stat-number" id="statCompleted">0</div><div class="stat-label">Completed</div></div></div>
+      <div class="col-6 col-md-3"><div class="stat-card cancelled"><div class="stat-number" id="statCancelled">0</div><div class="stat-label">Cancelled</div></div></div>
     </div>
 
     <div class="card mb-4 border-0 shadow-sm" id="uploadCard" style="display:none;">
@@ -1223,6 +1225,8 @@ function updateStats() {
   document.getElementById("statPending").textContent = orders.filter(o => o.Status === "Pending").length;
   document.getElementById("statScheduled").textContent = orders.filter(o => o.Status === "Scheduled").length;
   document.getElementById("statCompleted").textContent = orders.filter(o => o.Status === "Completed").length;
+  const cEl = document.getElementById("statCancelled");
+  if (cEl) cEl.textContent = orders.filter(o => o.Status === "Cancelled").length;
 }
 
 function badgeClass(s) {
@@ -1289,6 +1293,10 @@ function selectOrder(id) {
   document.getElementById("newStatus").value = o.Status || '';
   document.getElementById("archiveBtn").style.display = isManager ? "block" : "none";
   document.getElementById("deleteBtn").style.display = isAdmin ? "block" : "none";
+  // Cancelled is terminal: hide the manager Update Status form on a cancelled order
+  // (the backend also 400s any change) so managers don't hit a confusing error.
+  const _suForm = document.getElementById("statusUpdateForm");
+  if (_suForm) _suForm.style.display = (isManager && o.Status !== "Cancelled") ? "block" : "none";
 
   const ppeArray = typeof o.PPERequired === "string" && o.PPERequired
     ? o.PPERequired.split(",") : [];
@@ -1709,8 +1717,9 @@ async function cancelOrder() {
   const statusAtCancel = order.Status;
   if (statusAtCancel === "Completed" || statusAtCancel === "Cancelled") return;
   if (!confirm(`Cancel order ${selectedId}?\n\nThis marks it Cancelled and can't be undone. Everyone on the current (${statusAtCancel}) distribution will be notified.`)) return;
+  let resp;
   try {
-    await apiJson(`/orders/${encodeURIComponent(selectedId)}`, {
+    resp = await apiJson(`/orders/${encodeURIComponent(selectedId)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ fields: { Status: "Cancelled" }, note: "Order cancelled" }),
@@ -1719,15 +1728,18 @@ async function cancelOrder() {
     alert("Cancel failed: " + e.message);
     return;
   }
+  // Route + label off the server's AUTHORITATIVE prior status, not the possibly-stale
+  // in-memory read (guards against someone changing the order between load and cancel).
+  const trueStatus = (resp && resp.previousStatus) || statusAtCancel;
   await loadDataFromExcel();
   const author = submitterDisplayName || displayName(currentUserUpn);
   const ts = new Date().toLocaleString("en-US", { timeZone: "America/Toronto" });
   const subject = `Call Up Request CANCELLED: ${selectedId} - ${order.Event || ''}`;
-  const body = cancelOrderEmailBody(order, statusAtCancel, author, ts);
+  const body = cancelOrderEmailBody(order, trueStatus, author, ts);
   // Safe-test gate: while CANCEL_NOTIFY_LIVE is false, cancellation emails go to
   // David only (no third-party sends). Flip it true after sign-off for real routing.
   const targets = CANCEL_NOTIFY_LIVE
-    ? notifyTargets("cancelled", statusAtCancel)
+    ? notifyTargets("cancelled", trueStatus)
     : [{ to: ADMIN_RECIPIENT, attach: null }];
   for (const t of targets) {
     await sendEmail(t.to, subject, body, t.attach);

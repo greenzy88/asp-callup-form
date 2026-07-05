@@ -32,9 +32,23 @@ app.http("orderUpdate", {
       if (Object.keys(fields).some((k) => k === "__proto__" || k === "constructor" || k === "prototype")) {
         return { status: 400, jsonBody: { error: "Invalid field key" } };
       }
-      // Cancellation request? (a Status field set to "Cancelled", case-insensitive)
-      const _statusVal = fields.Status !== undefined ? fields.Status : fields.status;
-      const isCancelReq = _statusVal != null && String(_statusVal).trim().toLowerCase() === "cancelled";
+      // Canonicalize incoming field KEYS to the exact ORDERS_HEADERS casing so the
+      // case-insensitive auth checks below match what actually gets persisted
+      // (writeSheet is header-bound: a stray {status:...}/{STATUS:...} would otherwise
+      // pass the status gate but never write). Idempotent for already-correct keys.
+      {
+        const canonKey = new Map(ORDERS_HEADERS.map((h) => [h.toLowerCase(), h]));
+        for (const k of Object.keys(fields)) {
+          const canon = canonKey.get(k.toLowerCase());
+          if (canon && canon !== k) { fields[canon] = fields[k]; delete fields[k]; }
+        }
+      }
+      // Cancellation request? (Status "Cancelled", case-insensitive on the VALUE).
+      const isCancelReq = fields.Status != null && String(fields.Status).trim().toLowerCase() === "cancelled";
+      // Force the canonical stored value so every exact-string guard, badge and
+      // filter ("Cancelled") matches — a client can't persist "cancelled" and dodge
+      // the terminal guard.
+      if (isCancelReq) fields.Status = "Cancelled";
       const itemId = await workbookItemId();
       const [orders, history] = await Promise.all([
         readSheet(itemId, "Orders"),
@@ -50,11 +64,17 @@ app.http("orderUpdate", {
       const ts = new Date();
       const before = orderRows[idx];
 
-      // Cancelled is terminal — a cancelled order can't be edited or re-statused.
-      // And a completed order can't be cancelled (it's already done).
+      // Cancelled is terminal for content/status — but still allow an
+      // archive/unarchive-only change so a cancelled order can be hidden from the
+      // default list (otherwise it becomes permanent, un-filable cruft).
       if (String(before.Status || "").trim() === "Cancelled") {
-        return { status: 400, jsonBody: { error: "This order is cancelled and can no longer be changed." } };
+        const ks = Object.keys(fields);
+        const onlyArchive = ks.length > 0 && ks.every((k) => k === "Archived") && !(body.note && String(body.note).trim());
+        if (!onlyArchive) {
+          return { status: 400, jsonBody: { error: "This order is cancelled and can no longer be changed." } };
+        }
       }
+      // A completed order can't be cancelled (it's already done).
       if (isCancelReq && String(before.Status || "").trim() === "Completed") {
         return { status: 400, jsonBody: { error: "A completed order cannot be cancelled." } };
       }
@@ -208,7 +228,7 @@ app.http("orderUpdate", {
       pruneSnapshots(itemId, "Orders_Backup").catch(() => {});
       pruneSnapshots(itemId, "History_Backup").catch(() => {});
 
-      return { status: 200, jsonBody: { ok: true, order: after } };
+      return { status: 200, jsonBody: { ok: true, order: after, previousStatus: before.Status } };
     } catch (e) {
       ctx.error("orderUpdate failed:", e);
       return {
