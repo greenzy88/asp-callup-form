@@ -408,11 +408,12 @@
               <option>Pending</option><option>Scheduled</option><option>Completed</option>
             </select>
             <textarea id="newNote" class="form-control form-control-sm mb-2" rows="2" placeholder="Notes (optional)"></textarea>
-            <div class="d-flex gap-2 mb-4">
-              <button class="btn btn-sm" style="background:var(--asp-blue);color:#fff" onclick="updateStatus()">Save Update</button>
-              <button class="btn btn-sm btn-warning" id="archiveBtn" onclick="archiveOrder()" style="display:none;">&#x1F4E6; Archive</button>
-              <button class="btn btn-sm btn-danger" id="deleteBtn" onclick="deleteOrder()" style="display:none;">&#x1F5D1; Delete</button>
-            </div>
+          </div>
+          <div class="d-flex gap-2 mb-4 flex-wrap" id="statusActionRow">
+            <button class="btn btn-sm" style="background:var(--asp-blue);color:#fff" id="saveUpdateBtn" onclick="updateStatus()">Save Update</button>
+            <button class="btn btn-sm btn-warning" id="archiveBtn" onclick="archiveOrder()" style="display:none;">&#x1F4E6; Archive</button>
+            <button class="btn btn-sm btn-danger" id="deleteBtn" onclick="deleteOrder()" style="display:none;">&#x1F5D1; Delete</button>
+            <button class="btn btn-sm btn-outline-danger" id="cancelOrderBtn" onclick="cancelOrder()" style="display:none;">&#x2715; Cancel Order</button>
           </div>
           <h6 class="fw-bold mb-2" style="color:var(--asp-blue)">Status History</h6>
           <div id="historyLog"></div>
@@ -1291,12 +1292,28 @@ function selectOrder(id) {
     (o.StartDate ? fmtDateDisplay(o.StartDate) : '') + (o.EndDate && o.EndDate !== o.StartDate ? " to " + fmtDateDisplay(o.EndDate) : '') +
     (o.SiteContact ? " | " + o.SiteContact : '');
   document.getElementById("newStatus").value = o.Status || '';
-  document.getElementById("archiveBtn").style.display = isManager ? "block" : "none";
-  document.getElementById("deleteBtn").style.display = isAdmin ? "block" : "none";
-  // Cancelled is terminal: hide the manager Update Status form on a cancelled order
-  // (the backend also 400s any change) so managers don't hit a confusing error.
+  // ── Status-section action buttons, gated per role AND per status ──
+  // canCancel: managers/owner OR the named client submitters (Denise/Chad/Holly,
+  // first name in any format — mirrors backend roles.isCancelSubmitter).
+  const _sub = String(submitterDisplayName || "").trim().toLowerCase();
+  const _canCancel = isAdmin || isManager ||
+    ["denise", "chad", "holly"].some((f) => _sub === f || (_sub.startsWith(f) && !/[a-z]/.test(_sub.charAt(f.length))));
+  const _live = o.Status !== "Cancelled" && o.Status !== "Completed";     // Pending/Scheduled
+  const _notArch = !o.Archived || o.Archived === "No";
+  // Update Status form (dropdown + note) + Save Update: managers only, and not on a
+  // cancelled order (terminal — the backend also 400s any status change).
+  const _formOK = isManager && o.Status !== "Cancelled";
   const _suForm = document.getElementById("statusUpdateForm");
-  if (_suForm) _suForm.style.display = (isManager && o.Status !== "Cancelled") ? "block" : "none";
+  if (_suForm) _suForm.style.display = _formOK ? "block" : "none";
+  document.getElementById("saveUpdateBtn").style.display = _formOK ? "inline-block" : "none";
+  document.getElementById("archiveBtn").style.display = isManager ? "inline-block" : "none";   // archive allowed on any status (incl. cancelled)
+  document.getElementById("deleteBtn").style.display = isAdmin ? "inline-block" : "none";
+  // Cancel Order: managers + Denise/Chad/Holly, only on a live (Pending/Scheduled), non-archived order.
+  document.getElementById("cancelOrderBtn").style.display = (_canCancel && _live && _notArch) ? "inline-block" : "none";
+  // Hide the whole action row when the current user has no button in it (e.g. an
+  // ordinary client, who acts via the left panel's Edit/Revise instead).
+  const _row = document.getElementById("statusActionRow");
+  if (_row) _row.style.display = (isManager || isAdmin || (_canCancel && _live && _notArch)) ? "flex" : "none";
 
   const ppeArray = typeof o.PPERequired === "string" && o.PPERequired
     ? o.PPERequired.split(",") : [];
@@ -1326,17 +1343,8 @@ function selectOrder(id) {
     const reviseBtn = (!isEditingFields && o.Status !== "Completed" && o.Status !== "Cancelled" && (!o.Archived || o.Archived === "No"))
       ? `<button class="btn btn-sm btn-outline-primary" onclick="startReviseUpload()">&#x1F4C4; Upload Revised PDF</button>`
       : '';
-    // Cancel Order — managers/owner OR the named client submitters (Denise/Chad/
-    // Holly, by display name). Only on a live (Pending/Scheduled) order. The
-    // backend re-enforces the same rule. (David 2026-07-05.)
-    const _sub = String(submitterDisplayName || "").trim().toLowerCase();
-    // Match the backend roles.isCancelSubmitter: first name in any format
-    // (alone / + last initial / full name), any separator; reject a longer name.
-    const canCancelFront = isAdmin || isManager ||
-      ["denise", "chad", "holly"].some((f) => _sub === f || (_sub.startsWith(f) && !/[a-z]/.test(_sub.charAt(f.length))));
-    const cancelBtn = (!isEditingFields && canCancelFront && o.Status !== "Completed" && o.Status !== "Cancelled" && (!o.Archived || o.Archived === "No"))
-      ? `<button class="btn btn-sm btn-outline-danger" onclick="cancelOrder()">&#x2715; Cancel Order</button>`
-      : '';
+    // (Cancel Order now lives in the right-side Status section, next to Save
+    //  Update / Archive / Delete — see #statusActionRow. David 2026-07-05.)
     headerHtml = isEditingFields
       ? `<div class="d-flex gap-2 mb-3 flex-wrap">
            <button class="btn btn-sm" style="background:var(--asp-blue);color:#fff" onclick="saveFieldChanges()">&#x2713; Submit Revision</button>
@@ -1348,7 +1356,6 @@ function selectOrder(id) {
            <button class="btn btn-sm btn-outline-primary" onclick="editFields()">&#x270E; Edit Fields</button>
            ${reviseBtn}
            ${markCompletedBtn}
-           ${cancelBtn}
          </div>`);
   }
 
