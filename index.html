@@ -828,7 +828,11 @@ const msalConfig = {
   auth: {
     clientId: "47a13aa4-d214-4987-a6c8-472cc0161f67",
     authority: "https://login.microsoftonline.com/" + ASP_TENANT_ID,
-    redirectUri: window.location.href.split('?')[0]
+    // 2026-07-13 — MUST strip BOTH the query AND the fragment. The old
+    // href.split('?')[0] kept the '#...' part, so on a redirect RETURN (the page
+    // loads as ".../#code=...") the computed redirect_uri became ".../#code=..." —
+    // which matches no registered URI (AADSTS50011). origin+pathname is exact.
+    redirectUri: window.location.origin + window.location.pathname
   },
   cache: { cacheLocation: "localStorage", storeAuthStateInCookie: false }
 };
@@ -899,14 +903,30 @@ try {
   console.error("MSAL error:", e);
 }
 
-// Complete a redirect-based sign-in when loginPopup() fell back to loginRedirect
-// on a phone (blocked popup). Runs the SAME ASP tenant guard via handleAuthResponse.
-// No-op on a normal load (handleRedirectPromise resolves null when no redirect is
-// in progress), so the working popup path is unaffected.
-if (msalInstance) {
+// Completes the sign-in when we come back from Microsoft. Runs the ASP tenant guard
+// via handleAuthResponse.
+//
+// DEFENSE IN DEPTH — the popup guard below is NOT decoration. It is the exact bug that
+// took sign-in down on 2026-07-13 (armed by cdd8696, 2026-06-26):
+//   redirectUri IS this SPA, so a sign-in POPUP landed back inside a SECOND COPY of this
+//   app. That copy ran this very line, saw the opener's "interaction in progress" flag,
+//   and MSAL CLEARED THE AUTH HASH from the URL (~25ms after landing) before the opener's
+//   30ms poll could read it. The opener never signed in; the popup sat there showing the
+//   signed-out screen. The old comment here claimed this call was "a no-op on a normal
+//   load, so the working popup path is unaffected" — TRUE in the opener, FALSE in the
+//   popup. That untested assumption is what failed in front of the client.
+// Sign-in is now a full-page redirect (see loginPopup below), so no popup should exist —
+// but if one ever does again, it must NEVER run this handler.
+const _inPopup = !!(window.opener && window.opener !== window);
+if (msalInstance && !_inPopup) {
   msalInstance.handleRedirectPromise()
     .then(resp => { if (resp && resp.account) return handleAuthResponse(resp); })
-    .catch(e => { console.warn("redirect sign-in failed:", e && (e.message || e.errorCode)); });
+    .catch(e => {
+      console.warn("redirect sign-in failed:", e && (e.message || e.errorCode));
+      try { hideLoading(); } catch (_) {}
+      alert("Sign-in didn't complete.\n\n" + ((e && (e.message || e.errorCode)) || "") +
+            "\n\nPlease reload the page and sign in again.");
+    });
 }
 
 // Delegated click handlers. Order rows + card list use data-order-id rather
@@ -990,26 +1010,52 @@ async function handleAuthResponse(response) {
 // WKWebView from Teams/Outlook/SMS, locked corporate browsers). On these we fall
 // back to a full-page REDIRECT (same loginRequest → still ASP tenant-pinned; the
 // return is processed by handleRedirectPromise on load, which re-runs the guard).
-const _POPUP_FALLBACK_CODES = ["popup_window_error", "empty_window_error", "monitor_window_timeout"];
 let _loginInFlight = false;
 
+// SIGN-IN IS A FULL-PAGE REDIRECT. THERE IS NO POPUP. DO NOT REINTRODUCE ONE.
+// (2026-07-13, after sign-in failed in front of the client. Function name kept because
+//  it is the "Sign In with M365" button's onclick handler.)
+//
+// Two independent reasons a popup must never come back here:
+//
+//  1. THE POPUP ATE ITS OWN LOGIN CODE. redirectUri is this SPA, so the popup landed back
+//     inside a second copy of the app, whose on-load handleRedirectPromise() consumed and
+//     CLEARED the auth hash ~25ms after landing — before the opener's 30ms poll could read
+//     it. The opener stayed signed out; the popup sat on the signed-out screen forever.
+//     Reproduced live 2026-07-13: 3 of 4 desktop attempts FAILED. On mobile the opener tab
+//     is hidden, so its poll is throttled to ~1/sec and it loses essentially every time.
+//
+//  2. MICROSOFT IS ABOUT TO KILL POPUP AUTH ANYWAY. login.microsoftonline.com already
+//     sends Cross-Origin-Opener-Policy for this exact client_id (report-only today —
+//     verified 2026-07-13). Microsoft shipped the ENFORCING version once (Feb 2026), it
+//     broke popup logins industry-wide, and rolled it back. When it lands for real,
+//     window.opener is severed and every popup-based MSAL flow dies. A redirect is immune.
+//
+// A redirect also needs no pop-up permission, so the old "please allow pop-ups / use
+// Safari or Chrome" alert — which fired for ANY unrecognised error and sent David to his
+// browser settings for nothing — is gone. Errors now say what actually happened.
 function loginPopup() {
-  if (!msalInstance) { alert("MSAL not ready"); return; }
-  if (_loginInFlight) return;   // guard double-tap → MSAL "interaction_in_progress"
+  if (!msalInstance) { alert("Sign-in isn't ready yet. Please reload the page."); return; }
+  if (_loginInFlight) return;              // guard double-tap
   _loginInFlight = true;
-  msalInstance.loginPopup(loginRequest)
-    .then(handleAuthResponse)
-    .catch(e => {
-      const code = (e && e.errorCode) || "";
-      if (code === "user_cancelled") return;                 // closed on purpose
-      if (_POPUP_FALLBACK_CODES.includes(code)) {
-        try { msalInstance.loginRedirect(loginRequest); return; } catch (_) {}
-      }
-      alert("Sign-in couldn't open its window. Please allow pop-ups for this site and tap " +
-            "Sign In again — or open the app directly in Safari/Chrome.\n\n(" +
-            (e && e.message ? e.message : code) + ")");
-    })
-    .finally(() => { _loginInFlight = false; });
+  showLoading("Redirecting to Microsoft sign-in…");
+  // An interrupted earlier attempt can leave MSAL's interaction lock set, which makes every
+  // later attempt throw interaction_in_progress and the button look dead. Clear it first.
+  try {
+    sessionStorage.removeItem("msal.interaction.status");
+    localStorage.removeItem("msal.interaction.status");
+  } catch (_) {}
+  // On success this page NAVIGATES AWAY to Microsoft, so there is no .finally() to run —
+  // the return trip is completed by handleRedirectPromise() above on the next load.
+  msalInstance.loginRedirect(loginRequest).catch(e => {
+    _loginInFlight = false;
+    hideLoading();
+    const code = (e && e.errorCode) || "";
+    console.error("sign-in failed:", code, e && e.message);
+    alert("Sign-in could not start.\n\n" + (e && e.message ? e.message : code) +
+          "\n\nPlease reload the page and try again. If it keeps happening, send David " +
+          "this message.");
+  });
 }
 
 async function checkOwnerAuthStatus() {
@@ -1080,6 +1126,17 @@ async function apiJson(path, init) {
 function signOut() {
   // Clear the cached submitter so the next sign-in re-prompts for PIN.
   clearSubmitter();
+  // DELIBERATELY LEFT AS logoutPopup() — 2026-07-13.
+  // Sign-out is NOT part of the sign-in outage and it works today. A logoutRedirect() swap
+  // was written and then REVERTED, because verifying it needs a live M365 round-trip we
+  // chose not to spend. Shipping an UNTESTED auth change is precisely what caused the
+  // 2026-07-13 outage (cdd8696 shipped "JS syntax-checked" and was never exercised).
+  // Do not repeat it.
+  // TODO (before Microsoft enforces COOP — see loginPopup above): switch to
+  //   msalInstance.logoutRedirect({ postLogoutRedirectUri: origin + pathname })
+  // and VERIFY end-to-end first. NOTE: postLogoutRedirectUri must be registered on the Entra
+  // app registration (spa.redirectUris currently holds the origin WITHOUT a trailing slash) —
+  // confirm that before assuming the swap is a one-liner.
   msalInstance.logoutPopup();
 }
 
