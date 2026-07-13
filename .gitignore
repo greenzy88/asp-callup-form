@@ -1,3 +1,11 @@
+# Playwright (used by test/canary_live.js) is installed LOCALLY for running the canary by
+# hand. It must NEVER be committed, and there must NEVER be a package.json at the repo root:
+# Azure Static Web Apps' Oryx builder would detect a Node app and try to BUILD it, changing
+# what gets deployed. CI installs Playwright OUTSIDE the repo for exactly this reason —
+# see .github/workflows/signin-canary.yml.
+node_modules/
+package-lock.json
+
 test/__pycache__/
 test/_email_req.txt
 test/_email_out.txt
