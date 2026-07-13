@@ -10,7 +10,25 @@ on:
       - main
 
 jobs:
+  # DEPLOY GATE (added 2026-07-13, after sign-in broke in front of the client).
+  # Nothing ships unless a human can still sign in. These invariants are not style rules —
+  # each one, on its own, was violated by the code that took the app down. The gate is
+  # deliberately dependency-free and deterministic: a flaky gate gets bypassed, and a gate
+  # that gets bypassed protects nothing. See test/auth_invariants.js for what each one means.
+  verify_auth_invariants:
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.action != 'closed')
+    runs-on: ubuntu-latest
+    name: Sign-in invariants (deploy gate)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Assert the sign-in invariants hold
+        run: node test/auth_invariants.js
+
   build_and_deploy_job:
+    needs: verify_auth_invariants # <-- no deploy if sign-in is broken
     if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.action != 'closed')
     runs-on: ubuntu-latest
     name: Build and Deploy Job

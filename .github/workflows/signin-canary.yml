@@ -1,0 +1,64 @@
+name: Sign-in canary
+
+# WHY THIS EXISTS
+# On 2026-07-13 sign-in failed in front of the client. It had been broken since 2026-06-26 and
+# NOBODY KNEW, because nothing ever checked that a human can still log in. CI ran zero tests.
+#
+# The outage also shipped with NO DEPLOY — the live bytes had not changed since 2026-07-06. It
+# was a latent race that simply started losing. So a deploy gate alone is NOT enough: this app
+# can break while nobody touches it (a pinned CDN file changing, the Entra app registration
+# being edited, Microsoft enforcing COOP on the login page, an Azure platform change).
+#
+# This canary watches the LIVE site on a schedule. It NEVER SIGNS IN — no credentials, no
+# token, no MFA, no sign-in event. It drives a real browser to the edge of the Microsoft login
+# and verifies everything on our side of that boundary, then aborts.
+#
+# ALERTING: if this workflow fails, GitHub emails the repository owner automatically. That is
+# deliberate — no extra secret, no extra service, nothing else to keep alive.
+
+on:
+  schedule:
+    - cron: "0 */6 * * *" # every 6 hours
+  workflow_dispatch: {}
+  push:
+    branches: [main] # also right after every deploy
+
+permissions:
+  contents: read
+
+jobs:
+  canary:
+    name: Can a human still sign in?
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # canary_selftest.js needs the pre-fix commit 949d124
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # Playwright is installed OUTSIDE the repo on purpose. A package.json at the repo root
+      # would make Azure Static Web Apps' Oryx builder think this is a Node app and try to
+      # BUILD it — changing what gets deployed. Do not add one.
+      - name: Install Playwright (outside the repo)
+        run: |
+          mkdir -p /tmp/pw && cd /tmp/pw
+          npm init -y >/dev/null 2>&1
+          npm install playwright@1.49.0 >/dev/null 2>&1
+          npx playwright install --with-deps chromium
+
+      - name: Wait for the deploy to land
+        if: github.event_name == 'push'
+        run: sleep 120
+
+      - name: Sign-in invariants (live site)
+        env:
+          NODE_PATH: /tmp/pw/node_modules
+        run: node test/canary_live.js
+
+      - name: Self-test — prove the canary still catches the 2026-07-13 outage
+        env:
+          NODE_PATH: /tmp/pw/node_modules
+        run: node test/canary_selftest.js
