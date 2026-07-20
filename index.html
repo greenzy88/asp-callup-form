@@ -476,7 +476,8 @@ const RECIPIENTS = {
   chad:   "cmartin@torontoportauthority.com",       // Chad Martin (TPA)
   ap:     "airportplanning@torontoportauthority.com", // Airport Planning (TPA) — active 2026-07-20
   ytz:    "YTZShiftManagers@security-asp.com",       // YTZ Shift Managers (ASP) — active 2026-07-20
-  farhad: "fmohammad@security-asp.com",              // Farhad (ASP)
+  farhad: "fmohammad@security-asp.com",              // Farhad (ASP) — now Aviation Security Director; kept on notifications for now
+  prince: "princekhan@security-asp.com",             // Prince Khan (ASP) — BBTCA ops manager, Farhad's successor (added 2026-07-20)
   pat:    "pdeal@security-asp.com",                  // Pat (ASP)
   orders: "orders@security-asp.com",                 // Orders (ASP) — active 2026-07-20
   // (Holly = app access only, NOT a notification recipient — never list here)
@@ -486,19 +487,19 @@ const RECIPIENTS = {
 // (Source: David's 2026-06-11 distribution matrix. An "edit" routes by the
 // status the order had when it was edited.)
 function recipientKeysFor(event, statusAtEvent) {
-  if (event === "new")       return ["denise", "chad", "ap", "ytz", "farhad", "pat"];      // submitted -> Pending
+  if (event === "new")       return ["denise", "chad", "ap", "ytz", "farhad", "prince", "pat"];      // submitted -> Pending
   if (event === "scheduled") return ["denise", "chad", "ap"];                               // -> Scheduled
-  if (event === "completed") return ["denise", "chad", "ap", "farhad", "pat", "orders"];    // -> Completed
+  if (event === "completed") return ["denise", "chad", "ap", "farhad", "prince", "pat", "orders"];    // -> Completed
   if (event === "edit") {
     if (statusAtEvent === "Scheduled") return ["denise", "chad", "ap"];                      // (a change here bumps it back to Pending for re-review)
-    if (statusAtEvent === "Completed") return ["denise", "chad", "ap", "farhad", "pat", "orders"];
-    return ["denise", "chad", "ap", "ytz", "farhad", "pat"];                                 // Pending
+    if (statusAtEvent === "Completed") return ["denise", "chad", "ap", "farhad", "prince", "pat", "orders"];
+    return ["denise", "chad", "ap", "ytz", "farhad", "prince", "pat"];                                 // Pending
   }
   if (event === "cancelled") {
     // "Notify everyone on the order's CURRENT-status distribution" (David 2026-07-05).
     // A cancel can only happen from Pending or Scheduled.
     if (statusAtEvent === "Scheduled") return ["denise", "chad", "ap"];
-    return ["denise", "chad", "ap", "ytz", "farhad", "pat"];                                 // Pending
+    return ["denise", "chad", "ap", "ytz", "farhad", "prince", "pat"];                                 // Pending
   }
   return ["denise", "chad", "ap"];
 }
@@ -508,7 +509,7 @@ function recipientKeysFor(event, statusAtEvent) {
 // Farhad, Pat, Orders (ASP), plus David always. Holly is app-access-only — NOT a
 // notification recipient, so she is never added here. Duty Managers stay permanently
 // excluded (never in RECIPIENTS at all).
-const ACTIVE_RECIPIENTS = new Set(["denise", "chad", "ap", "ytz", "farhad", "pat", "orders"]);
+const ACTIVE_RECIPIENTS = new Set(["denise", "chad", "ap", "ytz", "farhad", "prince", "pat", "orders"]);
 
 // event: "new" | "edit" | "scheduled" | "completed"; statusBasket = order Status.
 // Returns [{ to, attach }] — one entry per ACTIVE recipient, plus David (always).
