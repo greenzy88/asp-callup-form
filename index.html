@@ -455,10 +455,10 @@ const CLIENT_UPNS = [
 // the client-facing copies (he gets his own separate copy of everything).
 // The post-order PDF attaches on submission ("new") AND completion only.
 //
-// PARTIAL ACTIVATION (David 2026-06-26): only addresses in ACTIVE_RECIPIENTS go
-// live now — Denise, Chad, Farhad, Pat (+ David always). Airport Planning, YTZ
-// Shift Managers and Orders are wired but DORMANT until David says "turn on the
-// rest". Holly has APP ACCESS ONLY and is NOT a notification recipient
+// FULL ACTIVATION (David 2026-07-20 "turn on the switch for the rest"): every basket
+// in ACTIVE_RECIPIENTS now sends — Denise, Chad, Farhad, Pat + Airport Planning, YTZ
+// Shift Managers, and Orders are now ACTIVE too (were DORMANT until 2026-07-20).
+// Holly has APP ACCESS ONLY and is NOT a notification recipient
 // (David 2026-06-26) — do not add her here.
 // Duty Managers (dutymanagers@torontoportauthority.com) are PERMANENTLY EXCLUDED
 // — never listed in any basket, at any status (David 2026-06-16 / removed
@@ -474,11 +474,11 @@ const ADMIN_RECIPIENT  = "dramlagan@security-asp.com";   // David — ALWAYS cop
 const RECIPIENTS = {
   denise: "droy@torontoportauthority.com",          // Denise Roy (TPA)
   chad:   "cmartin@torontoportauthority.com",       // Chad Martin (TPA)
-  ap:     "airportplanning@torontoportauthority.com", // Airport Planning (TPA) — dormant
-  ytz:    "YTZShiftManagers@security-asp.com",       // YTZ Shift Managers (ASP) — dormant
+  ap:     "airportplanning@torontoportauthority.com", // Airport Planning (TPA) — active 2026-07-20
+  ytz:    "YTZShiftManagers@security-asp.com",       // YTZ Shift Managers (ASP) — active 2026-07-20
   farhad: "fmohammad@security-asp.com",              // Farhad (ASP)
   pat:    "pdeal@security-asp.com",                  // Pat (ASP)
-  orders: "orders@security-asp.com",                 // Orders (ASP) — dormant
+  orders: "orders@security-asp.com",                 // Orders (ASP) — active 2026-07-20
   // (Holly = app access only, NOT a notification recipient — never list here)
 };
 
@@ -503,10 +503,12 @@ function recipientKeysFor(event, statusAtEvent) {
   return ["denise", "chad", "ap"];
 }
 
-// PARTIAL ACTIVATION SET — only these keys actually send right now.
-// (Add "ap", "ytz", "orders" when David says "turn on the rest". Holly is
-// app-access-only — NOT a notification recipient, so she is never added here.)
-const ACTIVE_RECIPIENTS = new Set(["denise", "chad", "farhad", "pat"]);
+// FULL ACTIVATION (David 2026-07-20: "turn on the switch for the rest") — every
+// wired basket now sends: Denise, Chad, Airport Planning (TPA) + YTZ Shift Managers,
+// Farhad, Pat, Orders (ASP), plus David always. Holly is app-access-only — NOT a
+// notification recipient, so she is never added here. Duty Managers stay permanently
+// excluded (never in RECIPIENTS at all).
+const ACTIVE_RECIPIENTS = new Set(["denise", "chad", "ap", "ytz", "farhad", "pat", "orders"]);
 
 // event: "new" | "edit" | "scheduled" | "completed"; statusBasket = order Status.
 // Returns [{ to, attach }] — one entry per ACTIVE recipient, plus David (always).
