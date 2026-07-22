@@ -11,6 +11,7 @@ const CLIENT = "client";
 const MANAGER_UPNS = new Set([
   "fmohammad@security-asp.com",
   "pdeal@security-asp.com",
+  "princekhan@security-asp.com",  // Prince Khan — BBTCA ops manager (David 2026-07-22; mirrors his notification access from 138395a)
 ]);
 const CLIENT_UPNS = new Set([
   "atraining@security-asp.com",
