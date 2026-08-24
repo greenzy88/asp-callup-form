@@ -25,7 +25,23 @@ async function getOwnerAccessToken() {
   }
   let res;
   try {
-    res = await msal.acquireFromRefresh(stored.refreshToken);
+    // acquireFromRefresh returns { result, rotatedRefreshToken } as of the
+    // 2026-08-24 outage fix — see msal.js. Microsoft hands back a NEW refresh
+    // token on use, and this call site used to discard it, so the credential
+    // never changed from the one minted at setup and died at exactly 90 days
+    // of inactivity with clients on the app.
+    const acquired = await msal.acquireFromRefresh(stored.refreshToken);
+    res = acquired.result;
+    if (acquired.rotatedRefreshToken) {
+      // PERSIST BEFORE RETURNING, and never let a storage failure take down a
+      // request that already has a good access token. A missed save costs the
+      // old token's remaining life; a thrown save costs the user their orders.
+      try {
+        await tokenStore.save(acquired.rotatedRefreshToken, stored.capturedBy);
+      } catch (_saveErr) {
+        // Deliberately swallowed. The next call retries the rotation.
+      }
+    }
   } catch (e) {
     const wrapped = new Error(
       `Owner refresh-token grant failed: ${e.errorMessage || e.message}. ` +

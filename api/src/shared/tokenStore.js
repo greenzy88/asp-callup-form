@@ -2,7 +2,14 @@
 // Table Storage (the same storage account SWA provisioned for its
 // managed Functions). Single row keyed by RowKey="owner".
 //
-// Tokens are stored opaque; rotated automatically on refresh.
+// Tokens are stored opaque. Rotation on refresh became TRUE on 2026-08-24 —
+// until that day this comment claimed it and save() had exactly one caller,
+// authCallback.js:95, the one-time setup. graph.js used the refresh token on
+// every request and threw away the rotated one Microsoft returned, so the
+// stored bytes never changed after 2026-05-26 and Entra killed them at exactly
+// 90 days of inactivity (AADSTS700082) with clients on the app. A comment
+// describing behaviour nobody had implemented is worse than no comment: it is
+// the reason nobody went looking.
 
 const { TableClient } = require("@azure/data-tables");
 const config = require("./config");
