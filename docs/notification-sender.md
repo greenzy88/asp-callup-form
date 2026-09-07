@@ -39,7 +39,7 @@ Two credentials, deliberately kept apart:
 | | Owner credential | Notification-sender credential |
 |---|---|---|
 | Account | `dramlagan@security-asp.com` | `atraining@security-asp.com` |
-| Permissions | Files.ReadWrite, Mail.Send | **Mail.Send only** |
+| Permissions | Files.ReadWrite, Mail.Send | Mail.Send **by use** (see note) |
 | Used for | spreadsheet, PDFs, submitters | sending notification email |
 | Stored at | table `OwnerTokens`, partition `owner` | table `OwnerTokens`, partition `sender` |
 | MSAL client | `api/src/shared/msal.js` | `api/src/shared/notifyMailer.js` |
@@ -51,6 +51,12 @@ read the spreadsheet. The worst thing a failure here can do is send a
 notification as David — which is where we started.
 
 `api/src/shared/mailSend.js` is the single place that decides which one sends.
+
+**Note on the sender's permissions:** the app only ever calls `sendMail` with
+that credential, but the token it gets back carries every scope `atraining@` has
+consented to for this app — which already included `Files.ReadWrite` before it
+was used as a sender (confirmed 2026-09-06). It is Mail.Send-only by use, not by
+grant. Genuinely narrowing it would need a separate app registration.
 
 ## App settings
 
@@ -152,6 +158,12 @@ account again. Nothing else needs doing; the switch stays as it was.
 `ageDays` is *designed* to reset on every successful send: Microsoft hands back
 a rotated refresh token and `notifyMailer.getAccessToken()` persists it — the
 2026-08-24 fix, carried into this path from the start rather than learned again.
+
+**It does not work. Measured 2026-09-06 — see `token-rotation-finding.md`.**
+Entra returns a rotated refresh token on every refresh, for both credentials, and
+the app discards every one of them: the MSAL cache the code reads is empty. The
+owner credential dies ~2026-11-22 unless that is fixed, and this one 90 days
+after its own capture. The paragraph below is what led to the measurement.
 
 **Do not assume it is working.** On 2026-09-06 the OWNER credential's
 `capturedAt` had not moved in 13 days of constant use, even though commit
