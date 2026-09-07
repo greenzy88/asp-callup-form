@@ -487,29 +487,54 @@ const RECIPIENTS = {
 // Which recipient KEYS are notified for an event + the order's status-at-event.
 // (Source: David's 2026-06-11 distribution matrix. An "edit" routes by the
 // status the order had when it was edited.)
+//
+// ── 2026-09-06: DE-DUPLICATION (David: "he gets duplicates because he gets YTZ
+//    Shift Manager emails as well") ──────────────────────────────────────────
+// Pat, Farhad and Prince are all MEMBERS of the YTZShiftManagers@ distribution
+// list (verified against the directory 2026-09-06, 9 members). On any basket
+// that already includes "ytz" they were also listed individually, so each of
+// them received the notification TWICE — once addressed to them, once fanned
+// out by the DL.
+//
+// They are now removed from exactly those three baskets — new, edit-Pending and
+// cancelled-Pending — and are still reached there through "ytz". They are
+// DELIBERATELY KEPT on completed / edit-Completed, because those baskets do NOT
+// include "ytz": there is no duplicate to remove there, and dropping them would
+// have silently cost them completion notices (David confirmed 2026-09-06).
+//
+// THE COUPLING THIS CREATES: their coverage of new/edit/cancelled now depends on
+// their membership of YTZShiftManagers@. If someone is removed from that DL they
+// stop receiving those notifications, with nothing here to show why. If a name
+// must be reachable independently of the DL, put the key back on the basket and
+// accept the duplicate. test/notification_routing_test.js pins this invariant.
+const YTZ_DL_MEMBERS = ["farhad", "prince", "pat"];
 function recipientKeysFor(event, statusAtEvent) {
-  if (event === "new")       return ["denise", "chad", "ap", "ytz", "farhad", "prince", "pat"];      // submitted -> Pending
+  if (event === "new")       return ["denise", "chad", "ap", "ytz"];                          // submitted -> Pending (Farhad/Prince/Pat via ytz)
   if (event === "scheduled") return ["denise", "chad", "ap"];                               // -> Scheduled
-  if (event === "completed") return ["denise", "chad", "ap", "farhad", "prince", "pat", "orders"];    // -> Completed
+  if (event === "completed") return ["denise", "chad", "ap", "farhad", "prince", "pat", "orders"];    // -> Completed (no ytz on this basket)
   if (event === "edit") {
     if (statusAtEvent === "Scheduled") return ["denise", "chad", "ap"];                      // (a change here bumps it back to Pending for re-review)
     if (statusAtEvent === "Completed") return ["denise", "chad", "ap", "farhad", "prince", "pat", "orders"];
-    return ["denise", "chad", "ap", "ytz", "farhad", "prince", "pat"];                                 // Pending
+    return ["denise", "chad", "ap", "ytz"];                                                  // Pending (Farhad/Prince/Pat via ytz)
   }
   if (event === "cancelled") {
     // "Notify everyone on the order's CURRENT-status distribution" (David 2026-07-05).
     // A cancel can only happen from Pending or Scheduled.
     if (statusAtEvent === "Scheduled") return ["denise", "chad", "ap"];
-    return ["denise", "chad", "ap", "ytz", "farhad", "prince", "pat"];                                 // Pending
+    return ["denise", "chad", "ap", "ytz"];                                                  // Pending (Farhad/Prince/Pat via ytz)
   }
   return ["denise", "chad", "ap"];
 }
 
 // FULL ACTIVATION (David 2026-07-20: "turn on the switch for the rest") — every
-// wired basket now sends: Denise, Chad, Airport Planning (TPA) + YTZ Shift Managers,
-// Farhad, Pat, Orders (ASP), plus David always. Holly is app-access-only — NOT a
-// notification recipient, so she is never added here. Duty Managers stay permanently
-// excluded (never in RECIPIENTS at all).
+// wired basket sends: Denise, Chad, Airport Planning (TPA) + YTZ Shift Managers,
+// Farhad, Prince, Pat, Orders (ASP), plus David always. Holly is app-access-only
+// — NOT a notification recipient, so she is never added here. Duty Managers stay
+// permanently excluded (never in RECIPIENTS at all).
+//
+// This set stays FULL after the 2026-09-06 de-duplication: farhad/prince/pat are
+// still live recipients, still on completed / edit-Completed. What changed is
+// which BASKETS list them (recipientKeysFor above), not whether they are active.
 const ACTIVE_RECIPIENTS = new Set(["denise", "chad", "ap", "ytz", "farhad", "prince", "pat", "orders"]);
 
 // event: "new" | "edit" | "scheduled" | "completed"; statusBasket = order Status.

@@ -35,6 +35,15 @@ jobs:
       - name: Assert the notification-sender invariants hold
         run: node test/notify_sender_test.js
 
+      # 2026-09-06 — WHO gets notified, and how many times. Pat was receiving
+      # every new-order mail twice: once directly, once via the YTZ Shift
+      # Managers DL he belongs to. The fix is one word in a list, and it
+      # regresses the moment somebody re-adds a name "to be sure he gets it" —
+      # which is how the duplicate appeared. The routing block is read straight
+      # out of index.html and evaluated, so this tests what ships.
+      - name: Assert the notification-routing invariants hold
+        run: node test/notification_routing_test.js
+
   build_and_deploy_job:
     needs: verify_auth_invariants # <-- no deploy if sign-in is broken
     if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.action != 'closed')
