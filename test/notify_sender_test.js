@@ -12,6 +12,36 @@
  */
 const path = require("path");
 const assert = require("assert");
+const Module = require("module");
+
+// THE GATE IS DEPENDENCY-FREE ON PURPOSE. api/node_modules is gitignored — a
+// package.json at the repo root would make Azure's Oryx builder think this is a
+// Node app and BUILD it, changing what gets deployed (see .gitignore). So the
+// CI runner has no @azure/* packages, and a test that requires one fails there
+// while passing locally. The modules under test pull in two of them, so we
+// intercept those two ids at the loader. Nothing else is faked: the code being
+// tested is the real code.
+const FAKE_MODULES = {
+  "@azure/msal-node": {
+    ConfidentialClientApplication: class {
+      constructor(cfg) { this.config = cfg; }
+      getTokenCache() { return { serialize: async () => "{}" }; }
+      async getAuthCodeUrl() { throw new Error("not exercised offline"); }
+      async acquireTokenByCode() { throw new Error("not exercised offline"); }
+      async acquireTokenByRefreshToken() { throw new Error("not exercised offline"); }
+    },
+  },
+  "@azure/data-tables": {
+    TableClient: { fromConnectionString: () => { throw new Error("not exercised offline"); } },
+  },
+};
+const _origLoad = Module._load;
+Module._load = function (request, parent, isMain) {
+  if (Object.prototype.hasOwnProperty.call(FAKE_MODULES, request)) {
+    return FAKE_MODULES[request];
+  }
+  return _origLoad.apply(this, arguments);
+};
 
 const SHARED = path.join(__dirname, "..", "api", "src", "shared");
 const P = (m) => require.resolve(path.join(SHARED, m));
