@@ -80,8 +80,17 @@ az staticwebapp appsettings set -n asp-callup-form -g asp-callup-form_group \
    --setting-names NOTIFY_SENDER_MODE=owner
 ```
 
-Takes effect within a minute, no deploy, no code change. Notifications go back
-to being sent as David.
+No deploy, no code change. Notifications go back to being sent as David.
+
+**It is not instant.** Measured during the 2026-09-06 rollout: an app-setting
+change reaches the running instances one at a time and took **~2 minutes** to
+converge. During the changeover some sends still use the old value. That is
+harmless in both directions — a send that still thinks it is in `notify` mode
+uses a credential that still works, and a send that has not yet learned about a
+new `NOTIFY_SENDER_UPN` falls back to the owner and still delivers. Poll
+`/api/auth/status` until every response agrees before assuming a change is
+fully live; a single agreeing response is not enough, because the next request
+may land on a different instance.
 
 ## Verifying without emailing the airport
 
@@ -152,3 +161,25 @@ the app knows or cares which credential sent the mail.
 `node test/notify_sender_test.js` — 15 offline checks, wired into the deploy
 gate. They assert the two properties that matter: a deploy alone changes
 nothing, and a broken sender still delivers the notification.
+
+The gate is DEPENDENCY-FREE and must stay that way: the runner checks out the
+repo and runs `node` with no install step, because `api/node_modules` is
+gitignored and a root `package.json` would change what Oryx deploys. Tests that
+load the real `tokenStore.js` / `notifyMailer.js` intercept `@azure/data-tables`
+and `@azure/msal-node` at the module loader for that reason. Verify any change
+to them against a `git archive` checkout with no `node_modules`, not just a dev
+machine — otherwise the gate passes locally and blocks the deploy on CI.
+
+## What was verified live on 2026-09-06
+
+Against the deployed app, with a self-test that mails only the owner:
+
+| Check | Result |
+| --- | --- |
+| Deploy with no settings set | owner status byte-identical, `notify.mode: owner`, self-test endpoint 404 |
+| Credential capture as the shared account | `identityMatches: true`, owner credential untouched |
+| Send after the switch | `sentAs: atraining@security-asp.com`, no fallback |
+| Send **with a post-order PDF** — read from the owner's OneDrive on the owner's credential, sent from the other mailbox | worked; this is what real "new"/"completed" notifications do |
+| Fallback, forced by pointing `NOTIFY_SENDER_UPN` at a mailbox with no credential | refused to send as the wrong mailbox, fell back to the owner, **still delivered**, reported `NOTIFY_IDENTITY_MISMATCH` |
+| Writing app settings on the live SWA | merges; all 8 pre-existing values byte-identical afterwards (checked by hash) |
+| Removing `SELFTEST_KEY` | endpoint returns 404 again on every instance, even with the correct key |
