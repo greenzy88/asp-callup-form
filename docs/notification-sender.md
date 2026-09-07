@@ -104,14 +104,24 @@ az staticwebapp appsettings set -n asp-callup-form -g asp-callup-form_group \
 curl -s -X POST https://delightful-bay-0e217b31e.7.azurestaticapps.net/api/email-selftest \
      -H "X-Selftest-Key: <the same string>"
 
-# then remove it again — with the setting gone the endpoint returns 404
+# ...and with the post-order PDF, which is what real "new"/"completed" sends do:
+curl -s -X POST https://delightful-bay-0e217b31e.7.azurestaticapps.net/api/email-selftest \
+     -H "X-Selftest-Key: <the same string>" \
+     -H "Content-Type: application/json" -d '{"attach":true}'
+
+# then remove it again — with the setting gone the endpoint returns 404.
+# NOTE: there is no --yes flag on this command.
 az staticwebapp appsettings delete -n asp-callup-form -g asp-callup-form_group \
-   --setting-names SELFTEST_KEY --yes
+   --setting-names SELFTEST_KEY
 ```
 
 It sends one email, to `OWNER_UPN` and nobody else (the recipient is hardcoded;
 there is no `to` parameter), through the same code path production uses. Check
 the From address on what arrives.
+
+Removing the key also takes a couple of minutes to reach every instance —
+confirm the endpoint really is 404 on several consecutive calls before
+considering it gone.
 
 ## When it breaks
 
@@ -139,9 +149,18 @@ Nothing is lost — that is `NOTIFY_FALLBACK_TO_OWNER` doing its job — and a
 **How to fix:** re-run `/api/auth/setup?as=notify` and sign in as the shared
 account again. Nothing else needs doing; the switch stays as it was.
 
-Note that `ageDays` resets on every successful send, because the rotated refresh
-token Microsoft hands back is persisted each time — the fix from the 2026-08-24
-outage, carried into this path from the start rather than learned again.
+`ageDays` is *designed* to reset on every successful send: Microsoft hands back
+a rotated refresh token and `notifyMailer.getAccessToken()` persists it — the
+2026-08-24 fix, carried into this path from the start rather than learned again.
+
+**Do not assume it is working.** On 2026-09-06 the OWNER credential's
+`capturedAt` had not moved in 13 days of constant use, even though commit
+`2b9043f` added exactly that persistence to `graph.js`. If rotation is not in
+fact persisting, the owner credential dies around **2026-11-22** — 90 days from
+its issue date, the same way it died on 2026-08-24 — and this one would follow
+90 days after its own capture. Treat that as an open question rather than a
+known-good mechanism: watch `ageDays` on both credentials, and read a value that
+keeps climbing as the alarm it was built to be.
 
 ## The better long-term answer
 
