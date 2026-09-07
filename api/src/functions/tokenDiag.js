@@ -118,6 +118,58 @@ async function probe(stored, scopes) {
   return out;
 }
 
+// Ask Entra directly, with no MSAL in the way: the plain OAuth2 refresh_token
+// grant. This is the only way to see whether the token RESPONSE carries a
+// refresh_token, now that we know the MSAL cache is empty and therefore tells
+// us nothing either way.
+//
+// Still read-only. If a rotated token comes back it is fingerprinted and
+// DISCARDED — which is exactly what every request on the app has been doing
+// since May, so this changes nothing about the credential's fate.
+async function rawGrant(stored, scope) {
+  if (!stored || !stored.refreshToken) return { stored: false };
+  const body = new URLSearchParams({
+    client_id: config.clientId(),
+    client_secret: config.clientSecret(),
+    grant_type: "refresh_token",
+    refresh_token: stored.refreshToken,
+    scope,
+  });
+  const r = await fetch(
+    "https://login.microsoftonline.com/" + config.tenantId() + "/oauth2/v2.0/token",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString(),
+    }
+  );
+  const txt = await r.text();
+  let j;
+  try { j = JSON.parse(txt); } catch (_) { j = null; }
+  if (!r.ok || !j) {
+    return {
+      stored: true,
+      httpStatus: r.status,
+      error: j ? j.error : txt.slice(0, 200),
+      errorDescription: j && j.error_description ? String(j.error_description).slice(0, 300) : null,
+    };
+  }
+  return {
+    stored: true,
+    httpStatus: r.status,
+    scopeRequested: scope,
+    scopeGranted: j.scope || null,
+    hasAccessToken: !!j.access_token,
+    expiresIn: j.expires_in || null,
+    // THE ANSWER.
+    responseIncludesRefreshToken: !!j.refresh_token,
+    refreshTokenFingerprint: fp(j.refresh_token),
+    storedFingerprint: fp(stored.refreshToken),
+    refreshTokenIsDifferent: !!j.refresh_token && j.refresh_token !== stored.refreshToken,
+    refreshTokenExpiresIn: j.refresh_token_expires_in || null,
+  };
+}
+
 app.http("tokenDiag", {
   route: "token-diag",
   methods: ["GET"],
@@ -144,6 +196,18 @@ app.http("tokenDiag", {
           isolatedProbe: await probe(notifyStored, ["Mail.Send"]),
         },
       };
+
+      // No MSAL. Does the token response itself carry a refresh_token?
+      try {
+        result.owner.rawGrant = await rawGrant(
+          ownerStored, "https://graph.microsoft.com/Files.ReadWrite https://graph.microsoft.com/Mail.Send offline_access"
+        );
+      } catch (e) { result.owner.rawGrant = { error: e.message }; }
+      try {
+        result.notify.rawGrant = await rawGrant(
+          notifyStored, "https://graph.microsoft.com/Mail.Send offline_access"
+        );
+      } catch (e) { result.notify.rawGrant = { error: e.message }; }
 
       // And what does the SHIPPED code conclude? acquireFromRefresh is
       // read-only — graph.js is what persists — so this is safe to call.
