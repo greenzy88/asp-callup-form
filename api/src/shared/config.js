@@ -59,6 +59,31 @@ module.exports = {
       .split(",")
       .map((s) => s.trim().toLowerCase())
       .filter(Boolean),
+  // ── Notification SENDER identity (2026-09-06) ─────────────────────────
+  // Business continuity: notifications used to leave as David personally.
+  // "owner"  = send as OWNER_UPN via the owner's stored token (the original
+  //            behaviour, and still the default so a deploy alone changes
+  //            nothing). "notify" = send as NOTIFY_SENDER_UPN using a SECOND,
+  //            independently stored refresh token captured by
+  //            /api/auth/setup?as=notify. Flipping this app setting is the
+  //            activation AND the rollback — no code push either way.
+  notifySenderMode: () =>
+    optional("NOTIFY_SENDER_MODE", "owner").toLowerCase() === "notify" ? "notify" : "owner",
+  // The mailbox notifications are sent AS in "notify" mode. Defaults to the
+  // shared client account so activation is a single setting flip. This is the
+  // account BBTCA staff already sign into the form with, so it outlives any
+  // one employee — which is the whole point of the change.
+  notifySenderUpn: () => optional("NOTIFY_SENDER_UPN", "atraining@security-asp.com").toLowerCase(),
+  // If the notify identity ever fails (password changed on the shared account,
+  // token revoked, Graph outage), fall back to the owner send rather than drop
+  // the notification. A wrong-looking From address is recoverable; a call-up
+  // that nobody at the airport hears about is not. Set to "0" to make failures
+  // hard instead.
+  notifyFallbackToOwner: () => optional("NOTIFY_FALLBACK_TO_OWNER", "1") !== "0",
+  // Shared secret enabling POST /api/email-selftest, which mails the OWNER and
+  // only the owner. Unset (the normal state) => the endpoint does not exist.
+  // Set it for the duration of a verification, then delete it again.
+  selftestKey: () => optional("SELFTEST_KEY", ""),
   // Hard cap on recipients per send — defends against mass-mail abuse even
   // when no allowlist is configured.
   emailMaxRecipients: () => parseInt(optional("EMAIL_MAX_RECIPIENTS", "15"), 10),

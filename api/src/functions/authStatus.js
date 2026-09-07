@@ -4,6 +4,7 @@
 
 const { app } = require("@azure/functions");
 const tokenStore = require("../shared/tokenStore");
+const notifyMailer = require("../shared/notifyMailer");
 
 app.http("authStatus", {
   route: "auth/status",
@@ -38,10 +39,23 @@ app.http("authStatus", {
         const ms = Date.now() - new Date(t.capturedAt).getTime();
         if (Number.isFinite(ms) && ms >= 0) ageDays = +(ms / 86_400_000).toFixed(2);
       }
+      // 2026-09-06 — the NOTIFICATION SENDER credential, reported alongside the
+      // owner's. Purely ADDITIVE: every field the SPA reads (ready, capturedBy,
+      // ageDays, stale, ...) keeps its exact meaning, so the health banner is
+      // untouched. Wrapped so that a problem with the new credential can never
+      // break the status call the client depends on.
+      let notify = null;
+      try {
+        notify = await notifyMailer.status();
+      } catch (e) {
+        notify = { error: e.message };
+      }
+
       return {
         status: 200,
         jsonBody: {
           ready: !!(t && t.refreshToken),
+          notify,
           capturedBy: t ? t.capturedBy : null,
           capturedAt: t ? t.capturedAt : null,
           ageDays,

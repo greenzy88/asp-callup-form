@@ -34,10 +34,20 @@ async function client() {
   return tbl;
 }
 
-async function load() {
+// 2026-09-06 — the table now holds MORE THAN ONE identity. The owner row
+// ("owner"/"owner") is unchanged and still the only credential that touches
+// OneDrive. A second row ("sender"/"notify") holds the mail-sending identity
+// (atraining@) introduced when notifications stopped leaving as David
+// personally. They are kept in DIFFERENT PARTITIONS on purpose: no query,
+// upsert or delete against one can ever reach the other, so a mistake in the
+// new code cannot cost the app its OneDrive connection.
+const OWNER_KEY = { partitionKey: "owner", rowKey: "owner" };
+const NOTIFY_KEY = { partitionKey: "sender", rowKey: "notify" };
+
+async function loadKey(partitionKey, rowKey) {
   const tbl = await client();
   try {
-    const row = await tbl.getEntity("owner", "owner");
+    const row = await tbl.getEntity(partitionKey, rowKey);
     return {
       refreshToken: row.refreshToken,
       capturedAt: row.capturedAt,
@@ -49,12 +59,12 @@ async function load() {
   }
 }
 
-async function save(refreshToken, capturedBy) {
+async function saveKey(partitionKey, rowKey, refreshToken, capturedBy) {
   const tbl = await client();
   await tbl.upsertEntity(
     {
-      partitionKey: "owner",
-      rowKey: "owner",
+      partitionKey,
+      rowKey,
       refreshToken,
       capturedBy: String(capturedBy || ""),
       capturedAt: new Date().toISOString(),
@@ -63,13 +73,31 @@ async function save(refreshToken, capturedBy) {
   );
 }
 
-async function clear() {
+async function clearKey(partitionKey, rowKey) {
   const tbl = await client();
   try {
-    await tbl.deleteEntity("owner", "owner");
+    await tbl.deleteEntity(partitionKey, rowKey);
   } catch (e) {
     if (e.statusCode !== 404) throw e;
   }
 }
 
-module.exports = { load, save, clear };
+// Owner credential — byte-for-byte the same row, shape and semantics as before.
+async function load() { return loadKey(OWNER_KEY.partitionKey, OWNER_KEY.rowKey); }
+async function save(refreshToken, capturedBy) {
+  return saveKey(OWNER_KEY.partitionKey, OWNER_KEY.rowKey, refreshToken, capturedBy);
+}
+async function clear() { return clearKey(OWNER_KEY.partitionKey, OWNER_KEY.rowKey); }
+
+// Notification-sender credential.
+async function loadNotify() { return loadKey(NOTIFY_KEY.partitionKey, NOTIFY_KEY.rowKey); }
+async function saveNotify(refreshToken, capturedBy) {
+  return saveKey(NOTIFY_KEY.partitionKey, NOTIFY_KEY.rowKey, refreshToken, capturedBy);
+}
+async function clearNotify() { return clearKey(NOTIFY_KEY.partitionKey, NOTIFY_KEY.rowKey); }
+
+module.exports = {
+  load, save, clear,
+  loadNotify, saveNotify, clearNotify,
+  OWNER_KEY, NOTIFY_KEY,
+};

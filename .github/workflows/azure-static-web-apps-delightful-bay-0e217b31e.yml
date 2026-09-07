@@ -18,7 +18,7 @@ jobs:
   verify_auth_invariants:
     if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.action != 'closed')
     runs-on: ubuntu-latest
-    name: Sign-in invariants (deploy gate)
+    name: Sign-in + notification-sender invariants (deploy gate)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -26,6 +26,14 @@ jobs:
           node-version: "20"
       - name: Assert the sign-in invariants hold
         run: node test/auth_invariants.js
+
+      # 2026-09-06 — notification SENDER invariants. The From address on call-up
+      # notifications moved off David's personal mailbox onto the shared
+      # atraining@ account. The property this guards is not "the new sender
+      # works" but "a deploy alone changes nothing, and a broken sender still
+      # delivers the notification". Offline, no network, no credentials.
+      - name: Assert the notification-sender invariants hold
+        run: node test/notify_sender_test.js
 
   build_and_deploy_job:
     needs: verify_auth_invariants # <-- no deploy if sign-in is broken

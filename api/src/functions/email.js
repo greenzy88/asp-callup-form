@@ -1,11 +1,19 @@
-// POST /api/email — send an HTML email as the OWNER (David). Used by
-// the SPA's notification on new-order / status-change events.
+// POST /api/email — send an HTML notification email. Used by the SPA on
+// new-order / status-change events.
+//
+// 2026-09-06: WHO the mail comes from is no longer decided here. It is decided
+// by shared/mailSend.js from the NOTIFY_SENDER_MODE app setting — "owner"
+// (the original: as David) or "notify" (as the shared atraining@ mailbox, for
+// business continuity). Everything else in this file — the caller auth, the
+// submitter check, the recipient allowlist, the attachment fetch from the
+// OWNER's OneDrive — is unchanged and applies identically in both modes.
 
 const { app } = require("@azure/functions");
 const { requireUser } = require("../shared/auth");
 const { canEdit } = require("../shared/roles");
 const { requireSubmitterIfClient } = require("../shared/submitters");
 const { graphFetch } = require("../shared/graph");
+const { sendConfigured } = require("../shared/mailSend");
 const config = require("../shared/config");
 
 app.http("email", {
@@ -95,39 +103,37 @@ app.http("email", {
         }
       }
 
-      // 2026-05-28 — visual sender mask. The underlying address stays the
-      // authenticated owner (Graph sendMail requires from.address == auth
-      // user OR a SendAs-permitted address). We override the display name
-      // so recipients see e.g. "ASP Call-Up Notifications (Do Not Reply)"
-      // in the From field instead of "David Ramlagan".
-      const payload = {
-        message: {
-          subject: String(subject),
-          body: { contentType: "HTML", content: String(html) },
-          from: {
-            emailAddress: {
-              name: config.senderDisplayName(),
-              address: config.ownerUpn(),
-            },
-          },
-          toRecipients: recipients.map((addr) => ({
-            emailAddress: { address: addr },
-          })),
-          ...(attachments.length ? { attachments } : {}),
-        },
-        saveToSentItems: true,
+      // The message itself is identical whichever identity sends it. The
+      // display-name mask ("ASP Call-Up Notifications (Do Not Reply)") is
+      // applied by mailSend.js alongside the From address, so the two can
+      // never disagree.
+      const message = {
+        subject: String(subject),
+        body: { contentType: "HTML", content: String(html) },
+        toRecipients: recipients.map((addr) => ({
+          emailAddress: { address: addr },
+        })),
+        ...(attachments.length ? { attachments } : {}),
       };
 
-      const r = await graphFetch("/me/sendMail", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (!r.ok && r.status !== 202) {
-        const txt = await r.text().catch(() => "");
-        return { status: r.status, jsonBody: { error: `Graph sendMail ${r.status}`, body: txt.slice(0, 500) } };
+      let sent;
+      try {
+        sent = await sendConfigured(ctx, message);
+      } catch (sendErr) {
+        // Same response shape the owner-only version returned, so the SPA and
+        // anything reading these logs see no change.
+        return {
+          status: sendErr.status || 502,
+          jsonBody: {
+            error: sendErr.message,
+            body: sendErr.graphBody || undefined,
+          },
+        };
       }
-      return { status: 200, jsonBody: { ok: true } };
+      if (sent.fellBack) {
+        ctx.warn(`email: sent as OWNER after the notify sender failed — ${sent.notifyError}`);
+      }
+      return { status: 200, jsonBody: { ok: true, sentAs: sent.sentAs } };
     } catch (e) {
       ctx.error("email failed:", e);
       return {
