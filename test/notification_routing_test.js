@@ -47,14 +47,31 @@ vm.createContext(sandbox);
 // which can see them. (Reading them off the sandbox instead yields undefined,
 // and assertions against undefined pass for the wrong reason.)
 const EXPORT = "\n;globalThis.__routing = { RECIPIENTS, ACTIVE_RECIPIENTS, YTZ_DL_MEMBERS," +
-  " recipientKeysFor, notifyTargets, ADMIN_RECIPIENT, NOTIFICATION_ROUTING_ENABLED };\n";
+  " recipientKeysFor, notifyTargets, ADMIN_RECIPIENT, NOTIFICATION_ROUTING_ENABLED," +
+  " cancelNotifyTargets, CANCEL_NOTIFY_LIVE, CANCEL_ALWAYS_KEYS };\n";
 vm.runInContext(src.slice(from, to) + EXPORT, sandbox, { filename: "index.html#routing" });
 
 const {
   RECIPIENTS, ACTIVE_RECIPIENTS, YTZ_DL_MEMBERS,
   recipientKeysFor, notifyTargets, ADMIN_RECIPIENT,
   NOTIFICATION_ROUTING_ENABLED,
+  cancelNotifyTargets, CANCEL_ALWAYS_KEYS,
 } = sandbox.__routing;
+
+// The cancellation invariants must hold in BOTH gate states, so the same block is
+// evaluated again with CANCEL_NOTIFY_LIVE forced true. Without this, "YTZ always
+// gets cancellations" would quietly stop being true the moment the third-party
+// distribution is switched on - its Scheduled basket contains no "ytz".
+const blockSrc = src.slice(from, to);
+const liveSrc = blockSrc.replace("const CANCEL_NOTIFY_LIVE = false;", "const CANCEL_NOTIFY_LIVE = true;");
+if (liveSrc === blockSrc) {
+  console.error("\nCould not force CANCEL_NOTIFY_LIVE true - the declaration moved. Fix the test, not the app.\n");
+  process.exit(1);
+}
+const liveSandbox = {};
+vm.createContext(liveSandbox);
+vm.runInContext(liveSrc + EXPORT, liveSandbox, { filename: "index.html#routing(live)" });
+const LIVE = liveSandbox.__routing;
 
 // Guard against the extraction silently yielding nothing: an assertion made
 // against undefined is not a passing test, it is an absent one.
@@ -207,6 +224,62 @@ check("every key used by a basket is in ACTIVE_RECIPIENTS", () => {
         label(e, s) + " names '" + k + "' but it is not active, so it is filtered out and " +
         "that person is silently not notified.");
     }
+  }
+});
+
+// -- CANCELLATIONS REACH YTZ SHIFT MANAGERS (David 2026-09-10) ---------------
+// "make sure YTZ Shift managers are on the cancellation emails like I am."
+// They were getting none: CANCEL_NOTIFY_LIVE has been false since the Cancel
+// feature shipped, so every cancellation went to David alone.
+const CANCEL_STATUSES = ["Pending", "Scheduled"];
+const addrs = (list) => list.map((t) => String(t.to).toLowerCase());
+
+check("YTZ Shift Managers are notified on every cancellation", () => {
+  for (const s of CANCEL_STATUSES) {
+    assert.ok(addrs(cancelNotifyTargets(s)).includes(String(RECIPIENTS.ytz).toLowerCase()),
+      "cancelled/" + s + " does not reach YTZShiftManagers@");
+  }
+});
+
+check("YTZ stays on cancellations if CANCEL_NOTIFY_LIVE is flipped true", () => {
+  for (const s of CANCEL_STATUSES) {
+    assert.ok(addrs(LIVE.cancelNotifyTargets(s)).includes(String(LIVE.RECIPIENTS.ytz).toLowerCase()),
+      "cancelled/" + s + " loses YTZ once the TPA distribution is on. The Scheduled " +
+      "basket has no 'ytz', so this must come from CANCEL_ALWAYS_KEYS, not recipientKeysFor.");
+  }
+});
+
+check("David is notified on every cancellation, in both gate states", () => {
+  const admin = String(ADMIN_RECIPIENT).toLowerCase();
+  for (const s of CANCEL_STATUSES) {
+    assert.ok(addrs(cancelNotifyTargets(s)).includes(admin), "gate off, cancelled/" + s);
+    assert.ok(addrs(LIVE.cancelNotifyTargets(s)).includes(admin), "gate on, cancelled/" + s);
+  }
+});
+
+check("cancellation targets contain no duplicate addresses", () => {
+  for (const s of CANCEL_STATUSES) {
+    for (const pair of [["gate off", cancelNotifyTargets], ["gate on", LIVE.cancelNotifyTargets]]) {
+      const to = addrs(pair[1](s));
+      assert.strictEqual(to.length, new Set(to).size, pair[0] + ", cancelled/" + s + " emails somebody twice");
+    }
+  }
+});
+
+check("while CANCEL_NOTIFY_LIVE is false, no third party is emailed on cancellation", () => {
+  const allowed = new Set([String(ADMIN_RECIPIENT).toLowerCase(), String(RECIPIENTS.ytz).toLowerCase()]);
+  for (const s of CANCEL_STATUSES) {
+    for (const a of addrs(cancelNotifyTargets(s))) {
+      assert.ok(allowed.has(a), "cancelled/" + s + " emails " + a + " while the gate is off - " +
+        "the gate exists to keep TPA out until David signs off");
+    }
+  }
+});
+
+check("cancellations never attach the post-order PDF", () => {
+  for (const s of CANCEL_STATUSES) {
+    for (const t of cancelNotifyTargets(s)) assert.strictEqual(t.attach, null, "cancelled/" + s + " attached");
+    for (const t of LIVE.cancelNotifyTargets(s)) assert.strictEqual(t.attach, null, "cancelled/" + s + " attached (gate on)");
   }
 });
 

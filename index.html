@@ -465,9 +465,12 @@ const CLIENT_UPNS = [
 // — never listed in any basket, at any status (David 2026-06-16 / removed
 // entirely 2026-06-26).
 const NOTIFICATION_ROUTING_ENABLED = true;
-// Cancellation notifications — start OFF (David-only) so the feature can be tested
-// safely without emailing third parties. Flip to true after David signs off; then
-// cancelling notifies the order's current-status distribution (recipientKeysFor "cancelled").
+// Cancellation notifications — this gates the THIRD-PARTY (TPA) distribution only.
+// David AND YTZ Shift Managers are notified on every cancellation regardless of it
+// (David 2026-09-10: "make sure YTZ Shift managers are on the cancellation emails
+// like I am"). While false, a cancellation emails David + YTZ and no TPA address.
+// Flip to true to add the order's current-status distribution (recipientKeysFor
+// "cancelled") on top — that is what starts emailing Denise, Chad and Airport Planning.
 const CANCEL_NOTIFY_LIVE = false;
 const ADMIN_RECIPIENT  = "dramlagan@security-asp.com";   // David — ALWAYS copied, every event
 
@@ -553,6 +556,28 @@ function notifyTargets(event, statusBasket, attachmentFilename) {
   for (const to of emails) {
     const lc = String(to).toLowerCase();
     if (!seen.has(lc)) { seen.add(lc); out.push({ to, attach }); }
+  }
+  return out;
+}
+
+// Cancellation recipients. David and YTZ Shift Managers are ALWAYS notified
+// (David 2026-09-10) — including cancellations from Scheduled, whose basket in
+// recipientKeysFor("cancelled") contains no "ytz". CANCEL_NOTIFY_LIVE adds the
+// third-party TPA distribution on top when it is turned on. Returns [{to, attach}]
+// with no duplicate addresses; cancellations never carry the post-order PDF.
+// Pinned by test/notification_routing_test.js — do not inline this back into the
+// cancel handler, where the deploy gate cannot see it.
+const CANCEL_ALWAYS_KEYS = ["ytz"];
+function cancelNotifyTargets(statusAtCancel) {
+  const emails = [ADMIN_RECIPIENT];
+  for (const k of CANCEL_ALWAYS_KEYS) if (RECIPIENTS[k]) emails.push(RECIPIENTS[k]);
+  if (CANCEL_NOTIFY_LIVE) {
+    for (const t of notifyTargets("cancelled", statusAtCancel)) emails.push(t.to);
+  }
+  const seen = new Set(), out = [];
+  for (const to of emails) {
+    const lc = String(to).toLowerCase();
+    if (!seen.has(lc)) { seen.add(lc); out.push({ to, attach: null }); }
   }
   return out;
 }
@@ -1832,11 +1857,10 @@ async function cancelOrder() {
   const ts = new Date().toLocaleString("en-US", { timeZone: "America/Toronto" });
   const subject = `Call Up Request CANCELLED: ${selectedId} - ${order.Event || ''}`;
   const body = cancelOrderEmailBody(order, trueStatus, author, ts);
-  // Safe-test gate: while CANCEL_NOTIFY_LIVE is false, cancellation emails go to
-  // David only (no third-party sends). Flip it true after sign-off for real routing.
-  const targets = CANCEL_NOTIFY_LIVE
-    ? notifyTargets("cancelled", trueStatus)
-    : [{ to: ADMIN_RECIPIENT, attach: null }];
+  // David + YTZ Shift Managers always; CANCEL_NOTIFY_LIVE gates the TPA
+  // distribution on top. Logic lives in cancelNotifyTargets() so the deploy gate
+  // can pin it (test/notification_routing_test.js).
+  const targets = cancelNotifyTargets(trueStatus);
   for (const t of targets) {
     await sendEmail(t.to, subject, body, t.attach);
   }
