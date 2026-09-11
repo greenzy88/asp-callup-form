@@ -266,13 +266,45 @@ check("cancellation targets contain no duplicate addresses", () => {
   }
 });
 
-check("while CANCEL_NOTIFY_LIVE is false, no third party is emailed on cancellation", () => {
-  const allowed = new Set([String(ADMIN_RECIPIENT).toLowerCase(), String(RECIPIENTS.ytz).toLowerCase()]);
+check("Denise and Chad are notified on every cancellation, in both gate states", () => {
+  for (const k of ["denise", "chad"]) {
+    const a = String(RECIPIENTS[k]).toLowerCase();
+    for (const s of CANCEL_STATUSES) {
+      assert.ok(addrs(cancelNotifyTargets(s)).includes(a),
+        k + " (" + a + ") is missing from cancelled/" + s + " - David added them 2026-09-11");
+      assert.ok(addrs(LIVE.cancelNotifyTargets(s)).includes(a),
+        k + " is missing from cancelled/" + s + " once the gate is on");
+    }
+  }
+});
+
+check("every CANCEL_ALWAYS_KEYS key is active and has an address", () => {
+  assert.ok(Array.isArray(CANCEL_ALWAYS_KEYS) && CANCEL_ALWAYS_KEYS.length,
+    "CANCEL_ALWAYS_KEYS is empty - cancellations would go to David alone again");
+  for (const k of CANCEL_ALWAYS_KEYS) {
+    assert.ok(RECIPIENTS[k], "CANCEL_ALWAYS_KEYS names '" + k + "' which has no address");
+    assert.ok(ACTIVE_RECIPIENTS.has(k),
+      "CANCEL_ALWAYS_KEYS names '" + k + "' but it is not in ACTIVE_RECIPIENTS");
+  }
+});
+
+check("cancellation recipients are exactly David + CANCEL_ALWAYS_KEYS while the gate is off", () => {
+  const allowed = new Set([String(ADMIN_RECIPIENT).toLowerCase()]);
+  for (const k of CANCEL_ALWAYS_KEYS) allowed.add(String(RECIPIENTS[k]).toLowerCase());
   for (const s of CANCEL_STATUSES) {
     for (const a of addrs(cancelNotifyTargets(s))) {
-      assert.ok(allowed.has(a), "cancelled/" + s + " emails " + a + " while the gate is off - " +
-        "the gate exists to keep TPA out until David signs off");
+      assert.ok(allowed.has(a),
+        "cancelled/" + s + " emails " + a + ", who is neither David nor in CANCEL_ALWAYS_KEYS");
     }
+  }
+});
+
+check("Airport Planning is NOT emailed on cancellation while the gate is off", () => {
+  const ap = String(RECIPIENTS.ap).toLowerCase();
+  for (const s of CANCEL_STATUSES) {
+    assert.ok(!addrs(cancelNotifyTargets(s)).includes(ap),
+      "cancelled/" + s + " emails Airport Planning (" + ap + "). David named Denise and Chad, " +
+      "not Airport Planning - adding it is his call, not a side effect.");
   }
 });
 

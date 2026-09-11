@@ -465,12 +465,13 @@ const CLIENT_UPNS = [
 // — never listed in any basket, at any status (David 2026-06-16 / removed
 // entirely 2026-06-26).
 const NOTIFICATION_ROUTING_ENABLED = true;
-// Cancellation notifications — this gates the THIRD-PARTY (TPA) distribution only.
-// David AND YTZ Shift Managers are notified on every cancellation regardless of it
-// (David 2026-09-10: "make sure YTZ Shift managers are on the cancellation emails
-// like I am"). While false, a cancellation emails David + YTZ and no TPA address.
-// Flip to true to add the order's current-status distribution (recipientKeysFor
-// "cancelled") on top — that is what starts emailing Denise, Chad and Airport Planning.
+// Cancellation notifications — this gate now only decides whether AIRPORT PLANNING
+// is added. Everyone else on a cancellation is unconditional via CANCEL_ALWAYS_KEYS:
+// David, YTZ Shift Managers (David 2026-09-10) and Denise + Chad (David 2026-09-11:
+// "add Denise and Chad to the cancellation notifications... they are our clients").
+// While false, a cancellation emails David + YTZ + Denise + Chad, and NOT
+// airportplanning@. Flip to true to add the order's current-status distribution
+// (recipientKeysFor "cancelled") on top, which brings Airport Planning in.
 const CANCEL_NOTIFY_LIVE = false;
 const ADMIN_RECIPIENT  = "dramlagan@security-asp.com";   // David — ALWAYS copied, every event
 
@@ -560,14 +561,19 @@ function notifyTargets(event, statusBasket, attachmentFilename) {
   return out;
 }
 
-// Cancellation recipients. David and YTZ Shift Managers are ALWAYS notified
-// (David 2026-09-10) — including cancellations from Scheduled, whose basket in
-// recipientKeysFor("cancelled") contains no "ytz". CANCEL_NOTIFY_LIVE adds the
-// third-party TPA distribution on top when it is turned on. Returns [{to, attach}]
-// with no duplicate addresses; cancellations never carry the post-order PDF.
-// Pinned by test/notification_routing_test.js — do not inline this back into the
-// cancel handler, where the deploy gate cannot see it.
-const CANCEL_ALWAYS_KEYS = ["ytz"];
+// Cancellation recipients. David plus everyone in CANCEL_ALWAYS_KEYS is notified on
+// EVERY cancellation, at any status — including from Scheduled, whose basket in
+// recipientKeysFor("cancelled") contains no "ytz". That unconditional shape is the
+// point: these people must not depend on which status the order happened to be in.
+//   ytz            — YTZ Shift Managers (David 2026-09-10)
+//   denise, chad   — the TPA client leads (David 2026-09-11)
+// CANCEL_NOTIFY_LIVE adds the status basket on top when turned on, which is what
+// brings in Airport Planning. Returns [{to, attach}] with no duplicate addresses;
+// cancellations never carry the post-order PDF.
+// Every key here must be in ACTIVE_RECIPIENTS and have an address — pinned by
+// test/notification_routing_test.js, which also forbids inlining this back into the
+// cancel handler where the deploy gate cannot see it.
+const CANCEL_ALWAYS_KEYS = ["ytz", "denise", "chad"];
 function cancelNotifyTargets(statusAtCancel) {
   const emails = [ADMIN_RECIPIENT];
   for (const k of CANCEL_ALWAYS_KEYS) if (RECIPIENTS[k]) emails.push(RECIPIENTS[k]);
